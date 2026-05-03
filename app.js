@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 4. Setup Global Mode Button Listeners
     const btnSelect = document.getElementById('btn-mode-select');
     const btnConnect = document.getElementById('btn-mode-connect');
+    const btnFluidBasis = document.getElementById('btn-fluid-basis');
     
     if (btnSelect) {
         btnSelect.addEventListener('click', () => setAppMode('SELECT'));
@@ -26,6 +27,10 @@ document.addEventListener('DOMContentLoaded', () => {
     
     if (btnConnect) {
         btnConnect.addEventListener('click', () => activateConnectTool('Straight'));
+    }
+
+    if (btnFluidBasis) {
+        btnFluidBasis.addEventListener('click', () => openFluidBasis());
     }
 
     // 5. Canvas Event Listeners
@@ -116,9 +121,10 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => {
         drawConnections();
         updateSimulation();
-        // Auto select fluid at start to show properties
+        // Auto select Fluid Basis at start to show case-basis properties
         if (globalModel['FLUID']) {
-            selectNode('FLUID', document.getElementById('obj-fluid'));
+            globalModel.FLUID.name = 'Fluid Basis';
+            openFluidBasis();
         }
     }, 100);
 });

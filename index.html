@@ -30,7 +30,12 @@
                 <a href="#" id="menu-clear" style="border-top: 1px solid #eee; color: #d9534f;">Clear Canvas</a>
             </div>
         </div>
-        <span class="menu-item">Process</span>
+        <div class="menu-dropdown" id="process-dropdown-container">
+            <span class="menu-item" id="menu-process">Process</span>
+            <div class="dropdown-content" id="dropdown-process">
+                <a href="#" id="menu-fluid-basis">Fluid Basis</a>
+            </div>
+        </div>
         <span class="menu-item">Simulate</span>
         <span class="menu-item">Tools</span>
         <span class="menu-item">View</span>
@@ -52,6 +57,23 @@
             <span class="ribbon-label">Connect</span>
         </button>
         
+        <div class="ribbon-divider"></div>
+
+        <button class="ribbon-btn" id="btn-fluid-basis" title="Open Fluid Basis">
+            <div class="ribbon-icon">
+                <svg width="22" height="24" viewBox="0 0 40 50" aria-hidden="true">
+                    <defs>
+                        <linearGradient id="fluidBasisGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#4a90e2;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#003366;stop-opacity:1" />
+                        </linearGradient>
+                    </defs>
+                    <path d="M 20 5 C 20 5, 5 25, 5 35 C 5 45, 15 45, 20 45 C 25 45, 35 45, 35 35 C 35 25, 20 5, 20 5 Z" fill="url(#fluidBasisGrad)" stroke="#001f3f" stroke-width="1.5"/>
+                </svg>
+            </div>
+            <span class="ribbon-label">Fluid Basis</span>
+        </button>
+
         <div class="ribbon-divider"></div>
         
         <div class="toolbar-palette" id="toolbarPalette"></div>
@@ -76,23 +98,7 @@
             <svg class="pfd-lines" id="svg-lines">
             </svg>
 
-            <!-- 1. Fluid & Duty (Top Left) -->
-            <div class="pfd-object" id="obj-fluid" data-id="FLUID" style="left: 40px; top: 40px;">
-                <div class="object-icon">
-                    <svg width="40" height="50" viewBox="0 0 40 50">
-                        <defs>
-                            <linearGradient id="dropGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" style="stop-color:#4a90e2;stop-opacity:1" />
-                                <stop offset="100%" style="stop-color:#003366;stop-opacity:1" />
-                            </linearGradient>
-                        </defs>
-                        <path d="M 20 5 C 20 5, 5 25, 5 35 C 5 45, 15 45, 20 45 C 25 45, 35 45, 35 35 C 35 25, 20 5, 20 5 Z" fill="url(#dropGrad)" stroke="#001f3f" stroke-width="1.5"/>
-                    </svg>
-                </div>
-                <div class="object-name">Fluid & Duty</div>
-            </div>
-
-            <!-- 2. Feed Tank TK-100 -->
+            <!-- 1. Feed Tank TK-100 -->
             <div class="pfd-object equipment object-type-tank" id="obj-tk100" data-id="TK-100" style="left: 100px; top: 270px;">
                 <div class="object-icon">
                     <img class="pfd-icon-img" src="toolbar/icons/tank.svg" alt="">
@@ -208,6 +214,7 @@
     <script src="formulas/objects/separator-formulas.js"></script>
     <script src="formulas/objects/heat-exchanger-formulas.js"></script>
     <script src="formulas/objects/mixer-formulas.js"></script>
+    <script src="formulas/objects/hydraulic-network-formulas.js"></script>
     <script src="formulas/objects/instrument-formulas.js"></script>
     <script src="formulas/objects/network-node-formulas.js"></script>
     <script src="toolbar/toolbar-catalog.js"></script>

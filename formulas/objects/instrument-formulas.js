@@ -65,9 +65,27 @@ function getPipePump(pipeId, connections, model) {
 }
 
 function getPipeFlowRate(pipeId, connections, model) {
+    const pipe = model[pipeId];
+    if (pipe && pipe.results && pipe.results.pressureCalculated && pipe.results.flow !== undefined) {
+        return toProcessNumber(pipe.results.flow);
+    }
+
     const pump = getPipePump(pipeId, connections, model);
     if (pump && pump.results) return toProcessNumber(pump.results.flow);
     return 0;
+}
+
+function getPipePressureAtLocationBar(pipe, location = 0.5) {
+    if (!pipe || !pipe.results || !pipe.results.pressureCalculated) return null;
+    const results = pipe.results;
+    const startPressure = parseFloat(results.inletPressure);
+    const endPressure = parseFloat(results.outletPressure);
+    if (Number.isFinite(startPressure) && Number.isFinite(endPressure)) {
+        const clampedLocation = Math.max(0, Math.min(1, parseFloat(location)));
+        const tapLocation = Number.isFinite(clampedLocation) ? clampedLocation : 0.5;
+        return startPressure + (endPressure - startPressure) * tapLocation;
+    }
+    return results.pressure === null ? null : toProcessNumber(results.pressure);
 }
 
 function getNodePressureBar(node, side) {
@@ -88,9 +106,14 @@ function getNodePressureBar(node, side) {
     return null;
 }
 
-function calculatePipePressureBar(pipeId, connections, model) {
+function calculatePipePressureBar(pipeId, connections, model, location = 0.5) {
     const conn = findPipeConnection(pipeId, connections);
     if (!conn) return null;
+
+    const pipe = model[pipeId];
+    if (pipe && pipe.results && pipe.results.pressureCalculated && pipe.results.pressure !== null) {
+        return getPipePressureAtLocationBar(pipe, location);
+    }
 
     const fromNode = model[conn.from];
     const toNode = model[conn.to];
@@ -103,7 +126,6 @@ function calculatePipePressureBar(pipeId, connections, model) {
     }
 
     const fluid = model.FLUID;
-    const pipe = model[pipeId];
     const density = fluid && fluid.props ? toProcessNumber(fluid.props.density) : 1000;
     const gravity = typeof GRAVITY === 'number' ? GRAVITY : 9.81;
     const flow = getPipeFlowRate(pipeId, connections, model);
@@ -117,7 +139,7 @@ function calculatePipePressureBar(pipeId, connections, model) {
     return null;
 }
 
-function calculatePipeInstrumentMeasurement(instrument, pipeId, model, connections) {
+function calculatePipeInstrumentMeasurement(instrument, pipeId, model, connections, location = 0.5) {
     if (!instrument || !pipeId || !model[pipeId]) {
         return { value: null, unit: '', percent: null, values: null, percents: null };
     }
@@ -127,7 +149,7 @@ function calculatePipeInstrumentMeasurement(instrument, pipeId, model, connectio
     let value = null;
 
     if (type === 'lineMonitor') {
-        const pressure = calculatePipePressureBar(pipeId, connections, model);
+        const pressure = calculatePipePressureBar(pipeId, connections, model, location);
         const flow = getPipeFlowRate(pipeId, connections, model);
         const temperature = model.FLUID && model.FLUID.props ? toProcessNumber(model.FLUID.props.temp) : null;
 
@@ -154,7 +176,7 @@ function calculatePipeInstrumentMeasurement(instrument, pipeId, model, connectio
     }
 
     if (type === 'pressureIndicator') {
-        value = calculatePipePressureBar(pipeId, connections, model);
+        value = calculatePipePressureBar(pipeId, connections, model, location);
     } else if (type === 'flowIndicator') {
         value = getPipeFlowRate(pipeId, connections, model);
     } else if (type === 'temperatureIndicator') {

@@ -67,6 +67,7 @@ function getSimulationState() {
         visuals: {}
     };
     document.querySelectorAll('.pfd-object').forEach(el => {
+        if (el.dataset.id === 'FLUID') return;
         data.visuals[el.dataset.id] = {
             left: el.style.left,
             top: el.style.top
@@ -81,13 +82,12 @@ function applySimulationState(jsonString) {
     
     Object.keys(globalModel).forEach(k => delete globalModel[k]);
     Object.assign(globalModel, data.model);
+    if (globalModel.FLUID) globalModel.FLUID.name = 'Fluid Basis';
     connections.splice(0, connections.length, ...data.connections);
     instrumentLinks.splice(0, instrumentLinks.length, ...(data.instrumentLinks || []));
     
     const canvas = document.getElementById('canvas');
-    canvas.querySelectorAll('.pfd-object').forEach(el => {
-        if(el.id !== 'obj-fluid') el.remove();
-    });
+    canvas.querySelectorAll('.pfd-object').forEach(el => el.remove());
     
     for (let key in globalModel) {
         if (key === 'FLUID' || globalModel[key].type === 'pipe') continue;
@@ -115,14 +115,6 @@ function applySimulationState(jsonString) {
         makeDraggable(div);
     }
     
-    if (data.visuals && data.visuals['FLUID']) {
-        const fluidDiv = document.getElementById('obj-fluid');
-        if (fluidDiv) {
-            fluidDiv.style.left = data.visuals['FLUID'].left;
-            fluidDiv.style.top = data.visuals['FLUID'].top;
-        }
-    }
-
     currentSelectedNode = null;
     renderSidebar(null);
     drawConnections();
@@ -154,7 +146,7 @@ function clearSimulationCanvas() {
     Object.keys(globalModel).forEach(k => delete globalModel[k]);
     globalModel["FLUID"] = { 
         type: "fluid", 
-        name: "Fluid & Duty", 
+        name: "Fluid Basis", 
         props: { 
             inputMode: "Basic",
             fluidName: "Water", 
@@ -175,14 +167,7 @@ function clearSimulationCanvas() {
     instrumentLinks.splice(0, instrumentLinks.length);
     
     const canvas = document.getElementById('canvas');
-    canvas.querySelectorAll('.pfd-object').forEach(el => {
-        if(el.id !== 'obj-fluid') el.remove();
-    });
-    const fluidDiv = document.getElementById('obj-fluid');
-    if (fluidDiv) {
-        fluidDiv.style.left = '40px';
-        fluidDiv.style.top = '40px';
-    }
+    canvas.querySelectorAll('.pfd-object').forEach(el => el.remove());
 
     currentSelectedNode = null;
     renderSidebar(null);
@@ -239,6 +224,14 @@ async function fileOpen() {
     }
 }
 
+function openFluidBasis() {
+    if (!globalModel.FLUID) return;
+    globalModel.FLUID.name = 'Fluid Basis';
+    if (typeof setAppMode === 'function') setAppMode('SELECT');
+    if (typeof hideContextMenu === 'function') hideContextMenu();
+    selectNode('FLUID', null);
+}
+
 // Menu Initialization
 function initMenuBar() {
     const positionDropdown = (container, dropdown) => {
@@ -256,6 +249,7 @@ function initMenuBar() {
         menuFile.addEventListener('click', (e) => {
             e.stopPropagation();
             editDropdown?.classList.remove('show');
+            processDropdown?.classList.remove('show');
             fileDropdown.classList.toggle('show');
             if (fileDropdown.classList.contains('show') && fileDropdownContent) {
                 positionDropdown(fileDropdown, fileDropdownContent);
@@ -332,6 +326,7 @@ function initMenuBar() {
         menuEdit.addEventListener('click', (e) => {
             e.stopPropagation();
             fileDropdown?.classList.remove('show');
+            processDropdown?.classList.remove('show');
             editDropdown.classList.toggle('show');
             if (editDropdown.classList.contains('show') && editDropdownContent) {
                 positionDropdown(editDropdown, editDropdownContent);
@@ -368,6 +363,38 @@ function initMenuBar() {
                 e.preventDefault();
                 editDropdown.classList.remove('show');
                 clearSimulationCanvas();
+            });
+        }
+    }
+
+    // Process Menu Logic
+    const menuProcess = document.getElementById('menu-process');
+    const processDropdown = document.getElementById('process-dropdown-container');
+
+    if (menuProcess && processDropdown) {
+        const processDropdownContent = document.getElementById('dropdown-process');
+        menuProcess.addEventListener('click', (e) => {
+            e.stopPropagation();
+            fileDropdown?.classList.remove('show');
+            editDropdown?.classList.remove('show');
+            processDropdown.classList.toggle('show');
+            if (processDropdown.classList.contains('show') && processDropdownContent) {
+                positionDropdown(processDropdown, processDropdownContent);
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!processDropdown.contains(e.target)) {
+                processDropdown.classList.remove('show');
+            }
+        });
+
+        const menuFluidBasis = document.getElementById('menu-fluid-basis');
+        if (menuFluidBasis) {
+            menuFluidBasis.addEventListener('click', (e) => {
+                e.preventDefault();
+                processDropdown.classList.remove('show');
+                openFluidBasis();
             });
         }
     }

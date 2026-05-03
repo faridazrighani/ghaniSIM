@@ -1,34 +1,75 @@
-function calculateFrictionFactor(reynolds, roughness, diameter) {
-    if (reynolds < 2000) return 64 / reynolds;
-    const relRoughness = (roughness / 1000) / (diameter / 1000);
-    const term1 = relRoughness / 3.7;
-    const term2 = 5.74 / Math.pow(reynolds, 0.9);
-    return 0.25 / Math.pow(Math.log10(term1 + term2), 2);
+function calculateTurbulentFrictionFactor(reynolds, relRoughness) {
+    let friction = 0.25 / Math.pow(Math.log10((relRoughness / 3.7) + (5.74 / Math.pow(reynolds, 0.9))), 2);
+    for (let i = 0; i < 20; i++) {
+        const next = 1 / Math.pow(-2 * Math.log10((relRoughness / 3.7) + (2.51 / (reynolds * Math.sqrt(friction)))), 2);
+        if (Math.abs(next - friction) < 1e-7) return next;
+        friction = next;
+    }
+    return friction;
+}
+
+function calculateFrictionFactor(reynolds, roughnessM, diameterM) {
+    if (!Number.isFinite(reynolds) || reynolds <= 0 || diameterM <= 0) return 0;
+    const laminar = 64 / reynolds;
+    if (reynolds < 2000) return laminar;
+
+    const relRoughness = Math.max(roughnessM || 0, 0) / diameterM;
+    const turbulent = calculateTurbulentFrictionFactor(Math.max(reynolds, 4000), relRoughness);
+    if (reynolds >= 4000) return turbulent;
+
+    const blend = (reynolds - 2000) / 2000;
+    return laminar + (turbulent - laminar) * blend;
+}
+
+function toPipeCalcNumber(value, fallback = 0) {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function calculatePipeHydraulicSegments(flowRateM3H, pipeProps) {
+    normalizePipeProps(pipeProps);
+    const details = [];
+    if (flowRateM3H <= 0 || !pipeProps.segments || pipeProps.segments.length === 0) return details;
+
+    const qM3S = flowRateM3H / 3600;
+    const fluid = globalModel["FLUID"];
+    const kinVisc = Math.max(toPipeCalcNumber(fluid?.props?.viscosity, 1), 0.000001) * 1e-6;
+
+    pipeProps.segments.forEach((seg, index) => {
+        const diameter = toPipeCalcNumber(seg.diameter);
+        const length = Math.max(0, toPipeCalcNumber(seg.length));
+        if (diameter <= 0) return;
+
+        const area = Math.PI * Math.pow(diameter, 2) / 4;
+        const velocity = qM3S / area;
+        const reynolds = (velocity * diameter) / kinVisc;
+        const frictionFactor = calculateFrictionFactor(reynolds, toPipeCalcNumber(seg.roughness, 0.000045), diameter);
+        const velocityHead = Math.pow(velocity, 2) / (2 * GRAVITY);
+        const majorLoss = frictionFactor * (length / diameter) * velocityHead;
+        const minorLoss = toPipeCalcNumber(seg.minorLoss) * velocityHead;
+
+        details.push({
+            index,
+            name: seg.name,
+            pipeSize: seg.pipeSize,
+            material: seg.material,
+            length,
+            diameter,
+            roughness: toPipeCalcNumber(seg.roughness, 0.000045),
+            minorLossK: toPipeCalcNumber(seg.minorLoss),
+            velocity,
+            reynolds,
+            frictionFactor,
+            majorLoss,
+            minorLoss,
+            totalLoss: majorLoss + minorLoss
+        });
+    });
+
+    return details;
 }
 
 function calculatePipeHeadLoss(flowRateM3H, pipeProps) {
-    if (flowRateM3H <= 0 || !pipeProps.segments || pipeProps.segments.length === 0) return 0;
-    const qM3S = flowRateM3H / 3600;
-    const kinVisc = globalModel["FLUID"].props.viscosity * 1e-6;
-
-    let totalMajorLoss = 0;
-    let refVelocity = 0;
-
-    for (let i = 0; i < pipeProps.segments.length; i++) {
-        const seg = pipeProps.segments[i];
-        const dM = seg.diameter;
-        if (dM <= 0) continue;
-        const area = Math.PI * Math.pow(dM, 2) / 4;
-        const velocity = qM3S / area;
-
-        if (i === 0) refVelocity = velocity;
-
-        const reynolds = (velocity * dM) / kinVisc;
-        const f = calculateFrictionFactor(reynolds, seg.roughness * 1000, dM * 1000);
-        const majorLoss = f * (seg.length / dM) * (Math.pow(velocity, 2) / (2 * GRAVITY));
-        totalMajorLoss += majorLoss;
-    }
-
-    const minorLoss = (pipeProps.minorLoss || 0) * (Math.pow(refVelocity, 2) / (2 * GRAVITY));
-    return totalMajorLoss + minorLoss;
+    return calculatePipeHydraulicSegments(flowRateM3H, pipeProps)
+        .reduce((sum, segment) => sum + segment.totalLoss, 0);
 }

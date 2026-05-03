@@ -3,6 +3,95 @@ const PIPE_SCHEMA = {
     minorLoss: { label: 'Fittings (K)', unit: '', type: 'number', default: 0 }
 };
 
-const PIPE_DEFAULT_SEGMENTS = [
-    { name: "Segment 1", pipeSize: "Custom diameter", diameter: 0.1, length: 10, roughness: 0.000045 }
+const PIPE_SIZE_OPTIONS = [
+    { label: 'Custom diameter', diameter: null },
+    { label: 'NPS 1 - Sch 40', diameter: 0.02664 },
+    { label: 'NPS 1 - Sch 80', diameter: 0.02431 },
+    { label: 'NPS 1.5 - Sch 40', diameter: 0.04089 },
+    { label: 'NPS 1.5 - Sch 80', diameter: 0.03810 },
+    { label: 'NPS 2 - Sch 40', diameter: 0.05250 },
+    { label: 'NPS 2 - Sch 80', diameter: 0.04925 },
+    { label: 'NPS 3 - Sch 40', diameter: 0.07793 },
+    { label: 'NPS 3 - Sch 80', diameter: 0.07366 },
+    { label: 'NPS 4 - Sch 40', diameter: 0.10226 },
+    { label: 'NPS 4 - Sch 80', diameter: 0.09718 },
+    { label: 'NPS 6 - Sch 40', diameter: 0.15405 },
+    { label: 'NPS 6 - Sch 80', diameter: 0.14633 },
+    { label: 'NPS 8 - Sch 40', diameter: 0.20272 },
+    { label: 'NPS 8 - Sch 80', diameter: 0.19368 },
+    { label: 'NPS 10 - Sch 40', diameter: 0.25451 },
+    { label: 'NPS 10 - Sch 80', diameter: 0.24765 },
+    { label: 'NPS 12 - Sch 40', diameter: 0.30323 },
+    { label: 'NPS 12 - Sch 80', diameter: 0.28885 }
 ];
+
+const PIPE_MATERIAL_OPTIONS = [
+    { label: 'Commercial steel', roughness: 0.000045 },
+    { label: 'Drawn tubing', roughness: 0.0000015 },
+    { label: 'Stainless steel', roughness: 0.000015 },
+    { label: 'PVC / smooth plastic', roughness: 0.0000015 },
+    { label: 'Cast iron', roughness: 0.00026 },
+    { label: 'Concrete', roughness: 0.0015 },
+    { label: 'Custom roughness', roughness: null }
+];
+
+const PIPE_DEFAULT_SEGMENTS = [
+    {
+        name: "Segment 1",
+        pipeSize: "Custom diameter",
+        material: "Commercial steel",
+        diameter: 0.1,
+        length: 10,
+        roughness: 0.000045,
+        minorLoss: 0
+    }
+];
+
+function getPipeSizeOption(label) {
+    return PIPE_SIZE_OPTIONS.find(item => item.label === label) || PIPE_SIZE_OPTIONS[0];
+}
+
+function getPipeMaterialOption(label) {
+    return PIPE_MATERIAL_OPTIONS.find(item => item.label === label) || PIPE_MATERIAL_OPTIONS[0];
+}
+
+function normalizePipeProps(pipeProps) {
+    if (!pipeProps) return { segments: [] };
+    if (!Array.isArray(pipeProps.segments) || pipeProps.segments.length === 0) {
+        pipeProps.segments = PIPE_DEFAULT_SEGMENTS.map(segment => ({ ...segment }));
+    }
+
+    const hasSegmentMinorLoss = pipeProps.segments.some(segment => segment.minorLoss !== undefined);
+    const legacyMinorLoss = !hasSegmentMinorLoss ? (parseFloat(pipeProps.minorLoss) || 0) : 0;
+
+    pipeProps.segments.forEach((segment, index) => {
+        segment.name = segment.name || `Segment ${index + 1}`;
+        segment.pipeSize = segment.pipeSize || 'Custom diameter';
+        segment.material = segment.material || 'Commercial steel';
+        segment.length = Math.max(0, parseFloat(segment.length) || 0);
+
+        const sizeOption = getPipeSizeOption(segment.pipeSize);
+        if (sizeOption && sizeOption.diameter) {
+            segment.diameter = sizeOption.diameter;
+        } else {
+            segment.pipeSize = 'Custom diameter';
+            segment.diameter = Math.max(0, parseFloat(segment.diameter) || 0);
+        }
+
+        const materialOption = getPipeMaterialOption(segment.material);
+        if (segment.roughness === undefined || segment.roughness === null || segment.roughness === '') {
+            segment.roughness = materialOption.roughness || 0.000045;
+        } else {
+            segment.roughness = Math.max(0, parseFloat(segment.roughness) || 0);
+        }
+
+        if (segment.minorLoss === undefined) {
+            segment.minorLoss = index === 0 ? legacyMinorLoss : 0;
+        } else {
+            segment.minorLoss = Math.max(0, parseFloat(segment.minorLoss) || 0);
+        }
+    });
+
+    pipeProps.minorLoss = 0;
+    return pipeProps;
+}

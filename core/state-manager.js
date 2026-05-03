@@ -13,7 +13,7 @@ const INSTRUMENT_TYPES = ['pressureIndicator', 'flowIndicator', 'temperatureIndi
 const globalModel = {
     "FLUID":  { 
         type: "fluid", 
-        name: "Fluid & Duty", 
+        name: "Fluid Basis", 
         props: { 
             inputMode: "Basic",
             fluidName: "Palm Oil", 
@@ -77,13 +77,14 @@ function cancelPendingConnection(redraw = true) {
     if (redraw) drawConnections();
 }
 
-function attachInstrumentToPipe(instrumentId, pipeId) {
+function attachInstrumentToPipe(instrumentId, pipeId, location = 0.5) {
     const instrument = globalModel[instrumentId];
     const pipe = globalModel[pipeId];
     if (!instrument || !pipe || !isInstrumentType(instrument.type) || pipe.type !== 'pipe') return;
 
+    const tapLocation = Math.max(0, Math.min(1, parseFloat(location)));
     instrumentLinks = instrumentLinks.filter(link => link.instrumentId !== instrumentId);
-    instrumentLinks.push({ instrumentId, pipeId, location: 0.5 });
+    instrumentLinks.push({ instrumentId, pipeId, location: Number.isFinite(tapLocation) ? tapLocation : 0.5 });
     instrument.props.attachedTo = pipeId;
     cancelPendingConnection(false);
     updateSimulation({ renderSidebarAfter: false });
@@ -106,6 +107,10 @@ function detachInstrumentFromPipe(instrumentId) {
         instrument.props.pressureSignal = null;
         instrument.props.flowSignal = null;
         instrument.props.temperatureSignal = null;
+    }
+
+    if (typeof updateLineMonitorCanvasReadout === 'function') {
+        updateLineMonitorCanvasReadout(instrumentId);
     }
 
     if (currentSelectedNode === instrumentId) {

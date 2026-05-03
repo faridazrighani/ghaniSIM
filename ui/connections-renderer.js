@@ -45,28 +45,65 @@ function pointsToPath(points) {
     return points.map((pt, idx) => `${idx === 0 ? 'M' : 'L'} ${pt.x} ${pt.y}`).join(' ');
 }
 
-function getRouteMidpoint(points) {
+function getRoutePointAtLocation(points, location = 0.5) {
     let totalLength = 0;
     for (let i = 1; i < points.length; i++) {
         totalLength += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
     }
 
-    let halfway = totalLength / 2;
+    const clampedLocation = Math.max(0, Math.min(1, parseFloat(location)));
+    let targetLength = totalLength * (Number.isFinite(clampedLocation) ? clampedLocation : 0.5);
     for (let i = 1; i < points.length; i++) {
         const start = points[i - 1];
         const end = points[i];
         const segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
-        if (halfway <= segmentLength || i === points.length - 1) {
-            const t = segmentLength === 0 ? 0 : halfway / segmentLength;
+        if (targetLength <= segmentLength || i === points.length - 1) {
+            const t = segmentLength === 0 ? 0 : targetLength / segmentLength;
             return {
                 x: start.x + (end.x - start.x) * t,
                 y: start.y + (end.y - start.y) * t
             };
         }
-        halfway -= segmentLength;
+        targetLength -= segmentLength;
     }
 
     return points[0];
+}
+
+function getRouteMidpoint(points) {
+    return getRoutePointAtLocation(points, 0.5);
+}
+
+function getRouteLocationFromPoint(points, point) {
+    let totalLength = 0;
+    let bestDistance = Infinity;
+    let bestLength = 0;
+    let traversedLength = 0;
+
+    for (let i = 1; i < points.length; i++) {
+        const start = points[i - 1];
+        const end = points[i];
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const segmentLength = Math.hypot(dx, dy);
+        totalLength += segmentLength;
+        if (segmentLength === 0) continue;
+
+        const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / Math.pow(segmentLength, 2)));
+        const projected = {
+            x: start.x + dx * t,
+            y: start.y + dy * t
+        };
+        const distance = Math.hypot(point.x - projected.x, point.y - projected.y);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            bestLength = traversedLength + segmentLength * t;
+        }
+
+        traversedLength += segmentLength;
+    }
+
+    return totalLength === 0 ? 0.5 : Math.max(0, Math.min(1, bestLength / totalLength));
 }
 
 function getPipeRoutePoints(pipeId) {
@@ -81,9 +118,16 @@ function getPipeRoutePoints(pipeId) {
     return buildPipeRoutePoints(p1, p2, routeStyle);
 }
 
-function getPipeTapPosition(pipeId) {
+function getPipeTapPosition(pipeId, location = 0.5) {
     const routePoints = getPipeRoutePoints(pipeId);
-    return routePoints ? getRouteMidpoint(routePoints) : null;
+    return routePoints ? getRoutePointAtLocation(routePoints, location) : null;
+}
+
+function getPipeLocationFromEvent(pipeId, event) {
+    const routePoints = getPipeRoutePoints(pipeId);
+    if (!routePoints) return 0.5;
+    const point = getCanvasPointFromEvent(event);
+    return getRouteLocationFromPoint(routePoints, point);
 }
 
 function drawConnections() {
@@ -106,7 +150,7 @@ function drawConnections() {
         if (!instrument || !pipe) return;
 
         const p1 = getObjectCenterPosition(link.instrumentId);
-        const p2 = getPipeTapPosition(link.pipeId);
+        const p2 = getPipeTapPosition(link.pipeId, link.location);
         if (!p1 || !p2) return;
 
         const selected = currentSelectedNode === link.instrumentId;
@@ -139,7 +183,7 @@ function drawConnections() {
             e.stopPropagation();
             if (appMode === 'CONNECT') {
                 if (pendingConnectionStart && pendingConnectionStart.kind === 'instrument') {
-                    attachInstrumentToPipe(pendingConnectionStart.id, path.dataset.pipeId);
+                    attachInstrumentToPipe(pendingConnectionStart.id, path.dataset.pipeId, getPipeLocationFromEvent(path.dataset.pipeId, e));
                 } else {
                     selectNode(path.dataset.pipeId, null);
                     drawConnections();
@@ -161,9 +205,10 @@ function drawConnections() {
             const items = [];
 
             if (pendingConnectionStart && pendingConnectionStart.kind === 'instrument') {
+                const tapLocation = getPipeLocationFromEvent(pipeId, e);
                 items.push({
                     label: 'Connect instrument here',
-                    action: () => attachInstrumentToPipe(pendingConnectionStart.id, pipeId)
+                    action: () => attachInstrumentToPipe(pendingConnectionStart.id, pipeId, tapLocation)
                 });
             }
 

@@ -145,6 +145,32 @@ function getObjectClassName(type) {
     return `${isInstrumentType(type) ? 'pfd-object instrument pfd-instrument' : 'pfd-object equipment'} object-type-${type}`;
 }
 
+function getLineMonitorReadoutMarkup() {
+    return `
+        <div class="line-monitor-readout" aria-label="PTF pipeline readout">
+            <table>
+                <tbody>
+                    <tr>
+                        <th scope="row">P</th>
+                        <td data-readout-key="pressure">-</td>
+                        <td>bar</td>
+                    </tr>
+                    <tr>
+                        <th scope="row">T</th>
+                        <td data-readout-key="temperature">-</td>
+                        <td>deg C</td>
+                    </tr>
+                    <tr>
+                        <th scope="row">F</th>
+                        <td data-readout-key="flow">-</td>
+                        <td>m3/h</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
 function getDefaultDescription(type) {
     const catalogItem = getToolbarItem(type);
     if (catalogItem) return catalogItem.label;
@@ -159,6 +185,7 @@ function getObjectMarkup(type, nodeId, desc) {
             ${getObjectPortsHtml(type)}
         </div>
         <div class="object-name">${nodeId}<br><span class="object-desc">${desc}</span></div>
+        ${type === 'lineMonitor' ? getLineMonitorReadoutMarkup() : ''}
     `;
 }
 

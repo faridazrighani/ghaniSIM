@@ -24,6 +24,32 @@ function getInstrumentLink(instrumentId) {
         || (attachedTo ? { instrumentId, pipeId: attachedTo, location: 0.5 } : null);
 }
 
+function formatCanvasReadoutValue(value, digits = 2) {
+    if (value === null || value === undefined || value === '') return '-';
+    const number = Number(value);
+    if (!Number.isFinite(number)) return String(value);
+    return number.toFixed(digits);
+}
+
+function updateLineMonitorCanvasReadout(instrumentId) {
+    const instrument = globalModel[instrumentId];
+    if (!instrument || instrument.type !== 'lineMonitor' || typeof getObjectElement !== 'function') return;
+
+    const objectEl = getObjectElement(instrumentId);
+    if (!objectEl) return;
+
+    const setValue = (key, value, digits) => {
+        const cell = objectEl.querySelector(`[data-readout-key="${key}"]`);
+        if (cell) cell.textContent = formatCanvasReadoutValue(value, digits);
+    };
+
+    const props = instrument.props || {};
+    setValue('pressure', props.measuredPressure, 2);
+    setValue('temperature', props.measuredTemperature, 1);
+    setValue('flow', props.measuredFlow, 2);
+    objectEl.classList.toggle('is-attached', !!props.attachedTo);
+}
+
 function updateInstrumentReadout(instrumentId) {
     const instrument = globalModel[instrumentId];
     if (!instrument || !isInstrumentType(instrument.type)) return;
@@ -31,7 +57,7 @@ function updateInstrumentReadout(instrumentId) {
     if (!instrument.props) instrument.props = {};
     const link = getInstrumentLink(instrumentId);
     const pipeId = link ? link.pipeId : '';
-    const readout = calculatePipeInstrumentMeasurement(instrument, pipeId, globalModel, connections);
+    const readout = calculatePipeInstrumentMeasurement(instrument, pipeId, globalModel, connections, link ? link.location : 0.5);
 
     instrument.props.attachedTo = pipeId;
     if (instrument.type === 'lineMonitor') {
@@ -48,6 +74,8 @@ function updateInstrumentReadout(instrumentId) {
         instrument.props.measuredUnit = readout.unit;
         instrument.props.measuredPercent = readout.percent;
     }
+
+    updateLineMonitorCanvasReadout(instrumentId);
 
     if (currentSelectedNode === instrumentId) {
         setSidebarReadout('instrument-attached-to', pipeId || '-');
@@ -83,32 +111,16 @@ function updateSimulation(options = {}) {
     tanks.forEach(tankId => {
         globalModel[tankId].props.vaporPressure = fluid.props.vaporPressure;
     });
+
+    resetHydraulicPipeResults(globalModel);
     
     const pumps = Object.keys(globalModel).filter(k => globalModel[k].type === 'pump');
     
     pumps.forEach(pumpId => {
         const pump = globalModel[pumpId];
         ensureNodeResults(pump);
-        
-        // Find Suction Network
-        const suctionConns = connections.filter(c => c.to === pumpId);
-        let suctionTank = null;
-        let suctionPipe = null;
-        if (suctionConns.length > 0) {
-            suctionPipe = globalModel[suctionConns[0].pipeId];
-            suctionTank = globalModel[suctionConns[0].from];
-            if (suctionTank && suctionTank.type !== 'tank') suctionTank = null;
-        }
-        
-        // Find Discharge Network
-        const dischargeConns = connections.filter(c => c.from === pumpId);
-        let dischargeTank = null;
-        let dischargePipe = null;
-        if (dischargeConns.length > 0) {
-            dischargePipe = globalModel[dischargeConns[0].pipeId];
-            dischargeTank = globalModel[dischargeConns[0].to];
-            if (dischargeTank && dischargeTank.type !== 'tank') dischargeTank = null;
-        }
+
+        const hydraulicContext = createPumpHydraulicContext(pumpId, globalModel, connections, density, vaporPressure);
         
         pump.results.sysCurve = [];
         pump.results.pumpCurve = [];
@@ -152,26 +164,8 @@ function updateSimulation(options = {}) {
         }
         
         const calcSysHead = (q) => {
-            if (!suctionTank || !dischargeTank) return 0;
-            const pSucHead = (suctionTank.props.pressure * 1e5) / (density * GRAVITY);
-            const pDisHead = (dischargeTank.props.pressure * 1e5) / (density * GRAVITY);
-            const zSuc = suctionTank.props.elevation + (suctionTank.props.liquidLevel || 0);
-            const zDis = dischargeTank.props.elevation + (dischargeTank.props.liquidLevel || 0);
-            const staticHead = (zDis - zSuc) + (pDisHead - pSucHead);
-            if (q === 0) return staticHead;
-            const lossSuc = suctionPipe ? calculatePipeHeadLoss(q, suctionPipe.props) : 0;
-            const lossDis = dischargePipe ? calculatePipeHeadLoss(q, dischargePipe.props) : 0;
-            return staticHead + lossSuc + lossDis;
-        };
-        
-        const calcNPSHa = (q) => {
-            if (!suctionTank) return 0;
-            const pSucHead = (suctionTank.props.pressure * 1e5) / (density * GRAVITY);
-            const pVapHead = vaporPressure / (density * GRAVITY);
-            const zSuc = suctionTank.props.elevation + (suctionTank.props.liquidLevel || 0);
-            const zPump = pump.props.elevation || 0;
-            const lossSuc = (suctionPipe && q > 0) ? calculatePipeHeadLoss(q, suctionPipe.props) : 0;
-            return pSucHead + (zSuc - zPump) - pVapHead - lossSuc;
+            const systemHead = calculatePumpSystemHead(hydraulicContext, q);
+            return systemHead === null ? 0 : systemHead;
         };
         
         const STEP = 5;
@@ -203,22 +197,29 @@ function updateSimulation(options = {}) {
             }
         }
         
-        if (opFlow !== null && suctionTank && dischargeTank) {
+        if (opFlow === null && hydraulicContext.isComplete) {
+            const maxDiff = getPumpHead(MAX_FLOW) - calcSysHead(MAX_FLOW);
+            if (maxDiff > 0) {
+                opFlow = MAX_FLOW;
+                opHead = getPumpHead(opFlow);
+            }
+        }
+
+        if (opFlow !== null && hydraulicContext.isComplete) {
             const eff = getPumpEfficiency(opFlow);
             const power = (opFlow * opHead * density * GRAVITY) / (3.6e6 * (eff/100));
-            const zSuc = suctionTank.props.elevation + (suctionTank.props.liquidLevel || 0);
-            const zPump = pump.props.elevation || 0;
-            const lossSuc = suctionPipe ? calculatePipeHeadLoss(opFlow, suctionPipe.props) : 0;
-            const suctionPressure = suctionTank.props.pressure + (density * GRAVITY * (zSuc - zPump - lossSuc)) / 100000;
-            const dischargePressure = suctionPressure + (density * GRAVITY * opHead) / 100000;
+            const hydraulicSnapshot = calculatePumpHydraulicSnapshot(hydraulicContext, opFlow, opHead);
+            applyHydraulicPathResults(hydraulicContext, hydraulicSnapshot, opFlow);
             pump.results.flow = opFlow.toFixed(2);
             pump.results.head = opHead.toFixed(2);
             pump.results.power = power.toFixed(2);
-            pump.results.npsha = calcNPSHa(opFlow).toFixed(2);
+            pump.results.npsha = hydraulicSnapshot.npsha.toFixed(2);
             pump.results.npshr = getPumpNPSHr(opFlow).toFixed(2);
             pump.results.efficiency = eff.toFixed(2);
-            pump.results.suctionPressure = suctionPressure.toFixed(3);
-            pump.results.dischargePressure = dischargePressure.toFixed(3);
+            pump.results.suctionPressure = hydraulicSnapshot.suctionPressureBar.toFixed(3);
+            pump.results.dischargePressure = hydraulicSnapshot.dischargePressureBar.toFixed(3);
+            pump.results.suctionLoss = hydraulicSnapshot.suctionLoss.toFixed(2);
+            pump.results.dischargeLoss = hydraulicSnapshot.dischargeLoss.toFixed(2);
         } else {
             pump.results.flow = 0;
             pump.results.head = 0;
@@ -228,6 +229,8 @@ function updateSimulation(options = {}) {
             pump.results.efficiency = 0;
             pump.results.suctionPressure = 0;
             pump.results.dischargePressure = 0;
+            pump.results.suctionLoss = 0;
+            pump.results.dischargeLoss = 0;
         }
         
         if (currentSelectedNode === pumpId || activeChartPumpId === pumpId) {
