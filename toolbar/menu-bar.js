@@ -49,6 +49,11 @@ function openSimulationFileFallback() {
             }
         }, { once: true });
 
+        input.addEventListener('cancel', () => {
+            input.remove();
+            resolve();
+        }, { once: true });
+
         document.body.appendChild(input);
         input.click();
     });
@@ -226,31 +231,11 @@ async function fileSave() {
 }
 
 async function fileOpen() {
-    if (!window.showOpenFilePicker) {
-        try {
-            await openSimulationFileFallback();
-        } catch (err) {
-            console.error(err);
-            alert('Failed to open file.');
-        }
-        return;
-    }
-
     try {
-        const [handle] = await window.showOpenFilePicker({
-            types: HYSYS_FILE_TYPES
-        });
-        currentFileHandle = handle;
-        const file = await handle.getFile();
-        const text = await file.text();
-        
-        applySimulationState(text);
-        
-        undoStack = [];
-        redoStack = [];
+        await openSimulationFileFallback();
     } catch (err) {
         console.error(err);
-        alert('Failed to open file.');
+        alert('Failed to open file. Please choose a valid .hysys or .json file saved by this app.');
     }
 }
 
