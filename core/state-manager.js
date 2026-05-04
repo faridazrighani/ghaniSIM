@@ -7,8 +7,14 @@ let connections = [
     { from: 'P-100', fromPort: '.port.outlet', to: 'TK-101', toPort: '.port.inlet', pipeId: 'PIPE-2' }
 ];
 let instrumentLinks = [];
+let sourceLinks = [];
 
 const INSTRUMENT_TYPES = ['pressureIndicator', 'flowIndicator', 'temperatureIndicator', 'lineMonitor', 'levelController'];
+const SOURCE_TEMP_MODE_FLUID_BASIS = 'Use Fluid Basis';
+const SOURCE_TEMP_MODE_CUSTOM = 'Custom';
+const SOURCE_FLOW_MODE_VOLUME = 'Volumetric Flow';
+const SOURCE_FLOW_MODE_MASS = 'Mass Flow';
+const SOURCE_DEFAULT_MASS_FLOW_KGH = 9500;
 
 const globalModel = {
     "FLUID":  { 
@@ -54,8 +60,16 @@ function createDefaultResults(type) {
         power: 0,
         npsha: 0,
         npshr: 0,
+        npshMargin: 0,
+        npshRatio: 0,
+        bepPercent: 0,
+        operatingRegion: '-',
+        status: '-',
+        warnings: [],
         suctionPressure: 0,
         dischargePressure: 0,
+        suctionLoss: 0,
+        dischargeLoss: 0,
         sysCurve: [],
         pumpCurve: []
     };
@@ -64,6 +78,11 @@ function createDefaultResults(type) {
 function ensureNodeResults(node) {
     if (!node.results) {
         node.results = createDefaultResults(node.type) || {};
+    } else if (node.type === 'pump') {
+        const defaults = createDefaultResults(node.type) || {};
+        Object.keys(defaults).forEach(key => {
+            if (node.results[key] === undefined) node.results[key] = defaults[key];
+        });
     }
     return node.results;
 }
@@ -90,6 +109,145 @@ function attachInstrumentToPipe(instrumentId, pipeId, location = 0.5) {
     updateSimulation({ renderSidebarAfter: false });
     selectNode(instrumentId, getObjectElement(instrumentId));
     drawConnections();
+}
+
+function isSourceAttachTarget(nodeId) {
+    const node = globalModel[nodeId];
+    if (!node || node.type === 'source' || node.type === 'pipe') return false;
+    if (typeof isInstrumentType === 'function' && isInstrumentType(node.type)) return false;
+    return true;
+}
+
+function getSourceLink(sourceId) {
+    return sourceLinks.find(link => link.sourceId === sourceId) || null;
+}
+
+function syncSourceAttachmentProps(sourceId) {
+    const source = globalModel[sourceId];
+    if (!source || source.type !== 'source') return;
+    if (!source.props) source.props = {};
+
+    const link = getSourceLink(sourceId);
+    source.props.attachedTo = link ? link.targetId : '';
+}
+
+function getFluidBasisTemperature() {
+    const temperature = parseFloat(globalModel.FLUID?.props?.temp);
+    return Number.isFinite(temperature) ? temperature : 25;
+}
+
+function getFluidBasisDensity() {
+    const density = parseFloat(globalModel.FLUID?.props?.density);
+    return Number.isFinite(density) && density > 0 ? density : 1000;
+}
+
+function calculateSourceVolumetricFlowFromMass(massFlowKgH, density = getFluidBasisDensity()) {
+    const massFlow = parseFloat(massFlowKgH);
+    const rho = parseFloat(density);
+    if (!Number.isFinite(massFlow) || !Number.isFinite(rho) || rho <= 0) return 0;
+    return massFlow / rho;
+}
+
+function calculateSourceMassFlowFromVolumetric(flowM3H, density = getFluidBasisDensity()) {
+    const flow = parseFloat(flowM3H);
+    const rho = parseFloat(density);
+    if (!Number.isFinite(flow) || !Number.isFinite(rho) || rho <= 0) return 0;
+    return flow * rho;
+}
+
+function isSourceUsingFluidBasisTemperature(source) {
+    return !source?.props || source.props.temperatureMode !== SOURCE_TEMP_MODE_CUSTOM;
+}
+
+function isSourceUsingMassFlow(source) {
+    return source?.props?.flowInputMode === SOURCE_FLOW_MODE_MASS;
+}
+
+function syncSourceFlowFromInputMode(sourceId) {
+    const source = globalModel[sourceId];
+    if (!source || source.type !== 'source') return;
+    if (!source.props) source.props = {};
+
+    const density = getFluidBasisDensity();
+    if (isSourceUsingMassFlow(source)) {
+        source.props.flow = calculateSourceVolumetricFlowFromMass(source.props.massFlow, density);
+    } else {
+        source.props.massFlow = calculateSourceMassFlowFromVolumetric(source.props.flow, density);
+    }
+}
+
+function normalizeSourceProps(source) {
+    if (!source || source.type !== 'source') return;
+    if (!source.props) source.props = {};
+    if (!source.props.temperatureMode) {
+        source.props.temperatureMode = SOURCE_TEMP_MODE_FLUID_BASIS;
+    }
+    if (!source.props.flowInputMode) {
+        source.props.flowInputMode = SOURCE_FLOW_MODE_MASS;
+    }
+    if (source.props.pressure === undefined) source.props.pressure = 1.013;
+    if (source.props.massFlow === undefined) {
+        source.props.massFlow = SOURCE_DEFAULT_MASS_FLOW_KGH;
+    }
+    if (source.props.flow === undefined) {
+        source.props.flow = calculateSourceVolumetricFlowFromMass(source.props.massFlow);
+    }
+    if (source.props.temp === undefined || isSourceUsingFluidBasisTemperature(source)) {
+        source.props.temp = getFluidBasisTemperature();
+    }
+    const sourceId = Object.keys(globalModel).find(nodeId => globalModel[nodeId] === source);
+    if (sourceId) syncSourceFlowFromInputMode(sourceId);
+}
+
+function syncSourceTemperatureFromFluidBasis(sourceId) {
+    const source = globalModel[sourceId];
+    if (!source || source.type !== 'source') return;
+    normalizeSourceProps(source);
+    if (isSourceUsingFluidBasisTemperature(source)) {
+        source.props.temp = getFluidBasisTemperature();
+    }
+}
+
+function syncAllSourceTemperaturesFromFluidBasis() {
+    Object.keys(globalModel).forEach(nodeId => {
+        if (globalModel[nodeId]?.type === 'source') {
+            syncSourceTemperatureFromFluidBasis(nodeId);
+            syncSourceFlowFromInputMode(nodeId);
+        }
+    });
+}
+
+function attachSourceToEquipment(sourceId, targetId) {
+    const source = globalModel[sourceId];
+    if (!source || source.type !== 'source' || !isSourceAttachTarget(targetId)) return;
+
+    sourceLinks = sourceLinks.filter(link => link.sourceId !== sourceId);
+    sourceLinks.push({
+        sourceId,
+        targetId,
+        targetPort: '.port.inlet'
+    });
+
+    syncSourceAttachmentProps(sourceId);
+    cancelPendingConnection(false);
+    updateSimulation({ renderSidebarAfter: false });
+    selectNode(sourceId, getObjectElement(sourceId));
+    drawConnections();
+}
+
+function detachSourceFromEquipment(sourceId) {
+    const source = globalModel[sourceId];
+    if (!source || source.type !== 'source') return;
+
+    sourceLinks = sourceLinks.filter(link => link.sourceId !== sourceId);
+    syncSourceAttachmentProps(sourceId);
+
+    if (currentSelectedNode === sourceId) {
+        renderSidebar(sourceId);
+    }
+
+    drawConnections();
+    updateSimulation({ renderSidebarAfter: currentSelectedNode !== null });
 }
 
 function detachInstrumentFromPipe(instrumentId) {
@@ -166,6 +324,18 @@ function deleteNode(nodeId) {
         return;
     }
     
+    if (globalModel[nodeId].type === 'source') {
+        detachSourceFromEquipment(nodeId);
+    }
+
+    sourceLinks = sourceLinks.filter(link => link.sourceId !== nodeId && link.targetId !== nodeId);
+
+    Object.keys(globalModel).forEach(id => {
+        if (globalModel[id]?.type === 'source') {
+            syncSourceAttachmentProps(id);
+        }
+    });
+
     if (isInstrumentType(globalModel[nodeId].type)) {
         detachInstrumentFromPipe(nodeId);
     }

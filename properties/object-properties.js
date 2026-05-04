@@ -45,10 +45,84 @@ function getDefaultProps(type) {
     return props;
 }
 
+function renderSourceAttachmentControls(nodeId, node, addRow, tbody) {
+    if (typeof syncSourceAttachmentProps === 'function') {
+        syncSourceAttachmentProps(nodeId);
+    }
+
+    const attachmentHeader = document.createElement('tr');
+    attachmentHeader.innerHTML = '<td colspan="2" style="background:#eee; font-weight:bold; padding:4px 8px; text-align:center;">Equipment Attachment</td>';
+    tbody.appendChild(attachmentHeader);
+
+    addRow('Attached Equipment', node.props.attachedTo || '-', 'source-attached-to', true);
+
+    const actionTr = document.createElement('tr');
+    actionTr.innerHTML = `
+        <td colspan="2" style="padding: 8px 12px;">
+            <button class="btn-add-segment" data-node="${nodeId}">Attach to equipment</button>
+            <button class="btn-disconnect-pipe" data-node="${nodeId}" style="margin-top: 6px;">Detach from equipment</button>
+        </td>
+    `;
+    tbody.appendChild(actionTr);
+
+    actionTr.querySelector('.btn-add-segment').addEventListener('click', () => {
+        setAppMode('CONNECT');
+        startSourceAttachment(nodeId);
+    });
+    actionTr.querySelector('.btn-disconnect-pipe').addEventListener('click', () => {
+        detachSourceFromEquipment(nodeId);
+    });
+}
+
 function renderObjectProperties(type, nodeId, node, addRow, tbody) {
     const schema = EQUIPMENT_SCHEMAS[type];
     if (!schema) {
         addRow('Notes', 'No custom properties defined for this object type.', '', true);
+        return;
+    }
+
+    if (type === 'source') {
+        if (typeof normalizeSourceProps === 'function') {
+            normalizeSourceProps(node);
+        }
+
+        const fluidBasisMode = typeof SOURCE_TEMP_MODE_FLUID_BASIS !== 'undefined' ? SOURCE_TEMP_MODE_FLUID_BASIS : 'Use Fluid Basis';
+        const customMode = typeof SOURCE_TEMP_MODE_CUSTOM !== 'undefined' ? SOURCE_TEMP_MODE_CUSTOM : 'Custom';
+        const linkedToFluidBasis = !node.props || node.props.temperatureMode !== customMode;
+
+        addRow('Boundary Pressure', node.props.pressure, 'pressure', false, 'bar a', 'number');
+        addRow('Temperature Mode', node.props.temperatureMode || fluidBasisMode, 'temperatureMode', false, '', 'select', [fluidBasisMode, customMode]);
+
+        if (linkedToFluidBasis && typeof syncSourceTemperatureFromFluidBasis === 'function') {
+            syncSourceTemperatureFromFluidBasis(nodeId);
+        }
+
+        addRow(
+            linkedToFluidBasis ? 'Temperature (Fluid Basis)' : 'Temperature',
+            node.props.temp,
+            linkedToFluidBasis ? 'source-temperature' : 'temp',
+            linkedToFluidBasis,
+            'deg C',
+            'number'
+        );
+
+        const volumetricFlowMode = typeof SOURCE_FLOW_MODE_VOLUME !== 'undefined' ? SOURCE_FLOW_MODE_VOLUME : 'Volumetric Flow';
+        const massFlowMode = typeof SOURCE_FLOW_MODE_MASS !== 'undefined' ? SOURCE_FLOW_MODE_MASS : 'Mass Flow';
+        if (typeof syncSourceFlowFromInputMode === 'function') {
+            syncSourceFlowFromInputMode(nodeId);
+        }
+
+        const usingMassFlow = node.props.flowInputMode === massFlowMode;
+        addRow('Flow Input Mode', node.props.flowInputMode || volumetricFlowMode, 'flowInputMode', false, '', 'select', [volumetricFlowMode, massFlowMode]);
+        if (usingMassFlow) {
+            addRow('Mass Flow', node.props.massFlow, 'massFlow', false, 'kg/h', 'number');
+            addRow('Volumetric Flow (Calculated)', node.props.flow, 'source-flow', true, 'm3/h');
+        } else {
+            addRow('Volumetric Flow', node.props.flow, 'flow', false, 'm3/h', 'number');
+            addRow('Mass Flow (Calculated)', node.props.massFlow, 'source-mass-flow', true, 'kg/h');
+        }
+
+        renderSourceAttachmentControls(nodeId, node, addRow, tbody);
         return;
     }
 
@@ -103,4 +177,5 @@ function renderObjectProperties(type, nodeId, node, addRow, tbody) {
             updateSimulation({ renderSidebarAfter: false });
         });
     }
+
 }

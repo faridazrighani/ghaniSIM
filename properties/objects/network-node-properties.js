@@ -1,7 +1,20 @@
 const SOURCE_SCHEMA = {
     pressure: { label: 'Boundary Pressure', unit: 'bar a', type: 'number', default: 1.013 },
-    temp: { label: 'Temperature', unit: 'deg C', type: 'number', default: 60 },
-    flow: { label: 'Flow Rate', unit: 'm3/h', type: 'number', default: 100 }
+    temperatureMode: {
+        label: 'Temperature Mode',
+        type: 'select',
+        default: 'Use Fluid Basis',
+        options: ['Use Fluid Basis', 'Custom']
+    },
+    temp: { label: 'Temperature', unit: 'deg C', type: 'number', default: 25 },
+    flowInputMode: {
+        label: 'Flow Input Mode',
+        type: 'select',
+        default: 'Mass Flow',
+        options: ['Volumetric Flow', 'Mass Flow']
+    },
+    flow: { label: 'Volumetric Flow', unit: 'm3/h', type: 'number', default: 9.5 },
+    massFlow: { label: 'Mass Flow', unit: 'kg/h', type: 'number', default: 9500 }
 };
 
 const SINK_SCHEMA = {
