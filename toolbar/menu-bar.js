@@ -64,6 +64,7 @@ function getSimulationState() {
         model: globalModel,
         connections: connections,
         instrumentLinks: instrumentLinks,
+        sourceLinks: sourceLinks,
         visuals: {}
     };
     document.querySelectorAll('.pfd-object').forEach(el => {
@@ -85,6 +86,20 @@ function applySimulationState(jsonString) {
     if (globalModel.FLUID) globalModel.FLUID.name = 'Fluid Basis';
     connections.splice(0, connections.length, ...data.connections);
     instrumentLinks.splice(0, instrumentLinks.length, ...(data.instrumentLinks || []));
+    sourceLinks.splice(0, sourceLinks.length, ...(data.sourceLinks || []));
+    if (typeof syncSourceAttachmentProps === 'function') {
+        Object.keys(globalModel).forEach(nodeId => {
+            if (globalModel[nodeId]?.type === 'source') {
+                syncSourceAttachmentProps(nodeId);
+                if (typeof syncSourceTemperatureFromFluidBasis === 'function') {
+                    syncSourceTemperatureFromFluidBasis(nodeId);
+                }
+                if (typeof syncSourceFlowFromInputMode === 'function') {
+                    syncSourceFlowFromInputMode(nodeId);
+                }
+            }
+        });
+    }
     
     const canvas = document.getElementById('canvas');
     canvas.querySelectorAll('.pfd-object').forEach(el => el.remove());
@@ -117,8 +132,8 @@ function applySimulationState(jsonString) {
     
     currentSelectedNode = null;
     renderSidebar(null);
+    updateSimulation({ renderSidebarAfter: false });
     drawConnections();
-    updateSimulation();
 }
 
 function captureState() {
@@ -165,6 +180,7 @@ function clearSimulationCanvas() {
     };
     connections.splice(0, connections.length);
     instrumentLinks.splice(0, instrumentLinks.length);
+    sourceLinks.splice(0, sourceLinks.length);
     
     const canvas = document.getElementById('canvas');
     canvas.querySelectorAll('.pfd-object').forEach(el => el.remove());

@@ -18,8 +18,11 @@ function getObjectCenterPosition(id) {
     const el = getObjectElement(id);
     if (!el) return null;
 
-    const icon = el.querySelector('.object-icon') || el;
-    const rect = icon.getBoundingClientRect();
+    const attachedLineMonitorReadout = el.classList.contains('object-type-lineMonitor') && el.classList.contains('is-attached')
+        ? el.querySelector('.line-monitor-readout')
+        : null;
+    const target = attachedLineMonitorReadout || el.querySelector('.object-icon') || el;
+    const rect = target.getBoundingClientRect();
     const canvas = document.getElementById('canvas');
     const canvasRect = canvas.getBoundingClientRect();
 
@@ -123,6 +126,13 @@ function getPipeTapPosition(pipeId, location = 0.5) {
     return routePoints ? getRoutePointAtLocation(routePoints, location) : null;
 }
 
+function getSourceAttachTargetPosition(link) {
+    if (!link) return null;
+    return getPortPosition(link.targetId, link.targetPort || '.port.inlet')
+        || getPortPosition(link.targetId, '.port.inlet')
+        || getObjectCenterPosition(link.targetId);
+}
+
 function getPipeLocationFromEvent(pipeId, event) {
     const routePoints = getPipeRoutePoints(pipeId);
     if (!routePoints) return 0.5;
@@ -132,7 +142,13 @@ function getPipeLocationFromEvent(pipeId, event) {
 
 function drawConnections() {
     const svg = document.getElementById('svg-lines');
-    let pathHTML = '';
+    let pathHTML = `
+        <defs>
+            <marker id="source-link-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#2f7d32"></path>
+            </marker>
+        </defs>
+    `;
     
     connections.forEach(conn => {
         const routePoints = getPipeRoutePoints(conn.pipeId);
@@ -158,15 +174,34 @@ function drawConnections() {
         pathHTML += `<path class="instrument-tap-line" d="${pointsToPath([p1, p2])}" stroke="${strokeColor}" fill="none" />`;
         pathHTML += `<circle class="instrument-tap-point" cx="${p2.x}" cy="${p2.y}" r="4" fill="#fff" stroke="${strokeColor}" stroke-width="1.5" />`;
     });
+
+    sourceLinks.forEach(link => {
+        const source = globalModel[link.sourceId];
+        const target = globalModel[link.targetId];
+        if (!source || !target) return;
+
+        const p1 = getPortPosition(link.sourceId, '.port.outlet') || getObjectCenterPosition(link.sourceId);
+        const p2 = getSourceAttachTargetPosition(link);
+        if (!p1 || !p2) return;
+
+        const selected = currentSelectedNode === link.sourceId || currentSelectedNode === link.targetId;
+        const strokeColor = selected ? '#2f7d32' : '#5c7f5c';
+        pathHTML += `<path class="source-feed-line" d="${pointsToPath([p1, p2])}" stroke="${strokeColor}" marker-end="url(#source-link-arrow)" fill="none" />`;
+        pathHTML += `<circle class="source-feed-point" cx="${p2.x}" cy="${p2.y}" r="4" fill="#f7fff7" stroke="${strokeColor}" stroke-width="1.5" />`;
+    });
     
     if (pendingConnectionStart && Number.isFinite(pendingConnectionStart.currentX)) {
         const p1 = pendingConnectionStart.kind === 'instrument'
             ? getObjectCenterPosition(pendingConnectionStart.id)
+            : pendingConnectionStart.kind === 'source'
+                ? (getPortPosition(pendingConnectionStart.id, '.port.outlet') || getObjectCenterPosition(pendingConnectionStart.id))
             : getPortPosition(pendingConnectionStart.id, pendingConnectionStart.portSelector);
         if (p1) {
             const p2 = { x: pendingConnectionStart.currentX, y: pendingConnectionStart.currentY };
             if (pendingConnectionStart.kind === 'instrument') {
                 pathHTML += `<path class="instrument-tap-line pipe-preview-line" d="${pointsToPath([p1, p2])}" stroke="#627d98" fill="none" />`;
+            } else if (pendingConnectionStart.kind === 'source') {
+                pathHTML += `<path class="source-feed-line pipe-preview-line" d="${pointsToPath([p1, p2])}" stroke="#5c7f5c" marker-end="url(#source-link-arrow)" fill="none" />`;
             } else {
                 const routePoints = buildPipeRoutePoints(p1, p2, pendingConnectionStart.routeStyle || 'Straight');
                 pathHTML += `<path class="pipe-preview-line" d="${pointsToPath(routePoints)}" stroke="var(--pipe-color)" stroke-width="4" stroke-dasharray="8,6" fill="none" stroke-linejoin="round" stroke-linecap="round" />`;
@@ -184,6 +219,8 @@ function drawConnections() {
             if (appMode === 'CONNECT') {
                 if (pendingConnectionStart && pendingConnectionStart.kind === 'instrument') {
                     attachInstrumentToPipe(pendingConnectionStart.id, path.dataset.pipeId, getPipeLocationFromEvent(path.dataset.pipeId, e));
+                } else if (pendingConnectionStart && pendingConnectionStart.kind === 'source') {
+                    return;
                 } else {
                     selectNode(path.dataset.pipeId, null);
                     drawConnections();

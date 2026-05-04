@@ -372,11 +372,24 @@ function makeDraggable(obj) {
         port.addEventListener('click', (e) => {
             if (appMode === 'CONNECT') {
                 e.stopPropagation();
+                const nodeId = obj.dataset.id;
+                const node = globalModel[nodeId];
                 if (pendingConnectionStart && pendingConnectionStart.kind === 'instrument') {
                     return;
                 }
+
+                if (pendingConnectionStart && pendingConnectionStart.kind === 'source') {
+                    if (isSourceAttachTarget(nodeId)) {
+                        attachSourceToEquipment(pendingConnectionStart.id, nodeId);
+                    }
+                    return;
+                }
+
+                if (node && node.type === 'source') {
+                    startSourceAttachment(nodeId, e);
+                    return;
+                }
                  
-                const nodeId = obj.dataset.id;
                 let portClass = '.' + Array.from(port.classList).join('.');
                  
                 if (!pendingConnectionStart) {
@@ -440,6 +453,20 @@ function makeDraggable(obj) {
         if (appMode !== 'CONNECT' || e.target.classList.contains('port')) return;
         const nodeId = obj.dataset.id;
         const node = globalModel[nodeId];
+        if (pendingConnectionStart && pendingConnectionStart.kind === 'source') {
+            e.stopPropagation();
+            if (isSourceAttachTarget(nodeId)) {
+                attachSourceToEquipment(pendingConnectionStart.id, nodeId);
+            }
+            return;
+        }
+
+        if (node && node.type === 'source') {
+            e.stopPropagation();
+            startSourceAttachment(nodeId, e);
+            return;
+        }
+
         if (node && isInstrumentType(node.type)) {
             e.stopPropagation();
             startInstrumentAttachment(nodeId, e);
@@ -461,6 +488,36 @@ function makeDraggable(obj) {
         e.stopPropagation();
         const nodeId = obj.dataset.id;
         const node = globalModel[nodeId];
+
+        if (node && node.type === 'source') {
+            const sourceLink = getSourceLink(nodeId);
+            const items = [
+                {
+                    label: 'Attach to equipment',
+                    action: () => {
+                        setAppMode('CONNECT');
+                        startSourceAttachment(nodeId, e);
+                    }
+                }
+            ];
+
+            if (sourceLink) {
+                items.push({
+                    label: `Detach from ${sourceLink.targetId}`,
+                    danger: true,
+                    action: () => detachSourceFromEquipment(nodeId)
+                });
+            }
+
+            items.push({
+                label: 'Delete Source',
+                danger: true,
+                action: () => deleteNode(nodeId)
+            });
+
+            showContextMenu(e.clientX, e.clientY, items);
+            return;
+        }
 
         if (node && isInstrumentType(node.type)) {
             const items = [
@@ -491,10 +548,25 @@ function makeDraggable(obj) {
             return;
         }
 
+        if (pendingConnectionStart && pendingConnectionStart.kind === 'source' && isSourceAttachTarget(nodeId)) {
+            showContextMenu(e.clientX, e.clientY, [
+                {
+                    label: 'Attach source here',
+                    action: () => attachSourceToEquipment(pendingConnectionStart.id, nodeId)
+                },
+                {
+                    label: 'Delete Object',
+                    danger: true,
+                    action: () => deleteNode(nodeId)
+                }
+            ]);
+            return;
+        }
+
         const defaultPort = getDefaultConnectPort(!pendingConnectionStart);
         if (!defaultPort) return;
 
-        showContextMenu(e.clientX, e.clientY, [
+        const items = [
             {
                 label: pendingConnectionStart ? 'Connect here' : 'Connect',
                 action: () => {
@@ -506,13 +578,53 @@ function makeDraggable(obj) {
                     }));
                 }
             },
-            {
-                label: 'Delete Object',
+        ];
+
+        const attachedSource = sourceLinks.find(link => link.targetId === nodeId);
+        if (attachedSource) {
+            items.push({
+                label: `Detach ${attachedSource.sourceId}`,
                 danger: true,
-                action: () => deleteNode(nodeId)
-            }
-        ]);
+                action: () => detachSourceFromEquipment(attachedSource.sourceId)
+            });
+        }
+
+        items.push({
+            label: 'Delete Object',
+            danger: true,
+            action: () => deleteNode(nodeId)
+        });
+
+        showContextMenu(e.clientX, e.clientY, items);
     });
+}
+
+function startSourceAttachment(sourceId, e = null) {
+    const source = globalModel[sourceId];
+    if (!source || source.type !== 'source') return;
+
+    const startPoint = getPortPosition(sourceId, '.port.outlet') || getObjectCenterPosition(sourceId);
+    if (!startPoint) return;
+
+    if (pendingConnectionStart) cancelPendingConnection(false);
+
+    const currentPoint = e ? getCanvasPointFromEvent(e) : startPoint;
+    pendingConnectionStart = {
+        kind: 'source',
+        id: sourceId,
+        currentX: currentPoint.x,
+        currentY: currentPoint.y
+    };
+
+    onCanvasMouseMove = (ev) => {
+        const point = getCanvasPointFromEvent(ev);
+        pendingConnectionStart.currentX = point.x;
+        pendingConnectionStart.currentY = point.y;
+        drawConnections();
+    };
+
+    document.addEventListener('pointermove', onCanvasMouseMove);
+    drawConnections();
 }
 
 function startInstrumentAttachment(instrumentId, e = null) {
@@ -575,6 +687,13 @@ function addEquipment(type) {
     
     // Initialize model
     const props = getDefaultProps(type);
+    if (type === 'source') {
+        props.temperatureMode = SOURCE_TEMP_MODE_FLUID_BASIS;
+        props.temp = getFluidBasisTemperature();
+        props.flowInputMode = SOURCE_FLOW_MODE_MASS;
+        props.massFlow = SOURCE_DEFAULT_MASS_FLOW_KGH;
+        props.flow = calculateSourceVolumetricFlowFromMass(props.massFlow);
+    }
     
     const defaultDesc = getDefaultDescription(type);
 

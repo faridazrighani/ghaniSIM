@@ -119,8 +119,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Give DOM time to render before drawing initial lines
     setTimeout(() => {
-        drawConnections();
         updateSimulation();
+        drawConnections();
         // Auto select Fluid Basis at start to show case-basis properties
         if (globalModel['FLUID']) {
             globalModel.FLUID.name = 'Fluid Basis';

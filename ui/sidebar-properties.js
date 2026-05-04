@@ -10,14 +10,39 @@ function setSidebarReadout(key, value, unit = '') {
         el.textContent = '-';
         return;
     }
-    const displayValue = (typeof value === 'number' && !Number.isInteger(value)) ? value.toFixed(3) : value;
+    const displayValue = formatNumericReadout(value);
     el.textContent = displayValue + (unit ? ' ' + unit : '');
 }
 
 function formatReadoutValue(value) {
     if (value === null || value === undefined || value === '') return '-';
-    if (typeof value === 'number' && !Number.isInteger(value)) return value.toFixed(3);
-    return value;
+    return formatNumericReadout(value);
+}
+
+function formatNumericReadout(value) {
+    if (typeof value !== 'number' || Number.isInteger(value)) return value;
+    const abs = Math.abs(value);
+    if (abs > 0 && abs < 0.01) return value.toFixed(6);
+    return value.toFixed(3);
+}
+
+function refreshFluidBasisReadouts(node) {
+    const readoutUnits = {
+        sg: '',
+        density: 'kg/m3',
+        dynViscosity: 'cP',
+        viscosity: 'cSt',
+        vaporPressure: 'bar a',
+        specificHeat: 'kJ/kg.K',
+        thermalConductivity: 'W/m.K',
+        bulkModulus: 'GPa',
+        specVolume: 'm3/kg',
+        specWeight: 'N/m3',
+        speedOfSound: 'm/s'
+    };
+    Object.entries(readoutUnits).forEach(([key, unit]) => {
+        setSidebarReadout(key, node.props[key], unit);
+    });
 }
 
 function formatEngineeringValue(value, digits = 2) {
@@ -119,25 +144,33 @@ function renderSidebar(nodeId) {
                         if (globalModel[n].props.dynViscosity && globalModel[n].props.density > 0) {
                             globalModel[n].props.viscosity = globalModel[n].props.dynViscosity / (globalModel[n].props.density / 1000);
                         }
-                        const rDensity = document.querySelector('td.prop-value[data-key="density"]');
-                        if(rDensity) rDensity.textContent = globalModel[n].props.density.toFixed(2) + ' kg/m3';
-                        const rVisc = document.querySelector('td.prop-value[data-key="viscosity"]');
-                        if(rVisc) rVisc.textContent = globalModel[n].props.viscosity.toFixed(3) + ' cSt';
+                        recalcExtendedFluidProps(globalModel[n]);
+                        setSidebarReadout('density', globalModel[n].props.density, 'kg/m3');
+                        setSidebarReadout('viscosity', globalModel[n].props.viscosity, 'cSt');
+                        setSidebarReadout('specVolume', globalModel[n].props.specVolume, 'm3/kg');
+                        setSidebarReadout('specWeight', globalModel[n].props.specWeight, 'N/m3');
+                        setSidebarReadout('speedOfSound', globalModel[n].props.speedOfSound, 'm/s');
                     } else if (k === 'dynViscosity') {
                         if (globalModel[n].props.density > 0) {
                             globalModel[n].props.viscosity = v / (globalModel[n].props.density / 1000);
                         }
-                        const rVisc = document.querySelector('td.prop-value[data-key="viscosity"]');
-                        if(rVisc) rVisc.textContent = globalModel[n].props.viscosity.toFixed(3) + ' cSt';
+                        setSidebarReadout('viscosity', globalModel[n].props.viscosity, 'cSt');
                     } else if (k === 'density' || k === 'bulkModulus') {
                         // Re-trigger extended calc if primary inputs change
                         recalcExtendedFluidProps(globalModel[n]);
-                        const rVol = document.querySelector('td.prop-value[data-key="specVolume"]');
-                        if(rVol) rVol.textContent = globalModel[n].props.specVolume.toFixed(6) + ' m3/kg';
-                        const rWt = document.querySelector('td.prop-value[data-key="specWeight"]');
-                        if(rWt) rWt.textContent = globalModel[n].props.specWeight.toFixed(2) + ' N/m3';
-                        const rSnd = document.querySelector('td.prop-value[data-key="speedOfSound"]');
-                        if(rSnd) rSnd.textContent = globalModel[n].props.speedOfSound.toFixed(2) + ' m/s';
+                        setSidebarReadout('specVolume', globalModel[n].props.specVolume, 'm3/kg');
+                        setSidebarReadout('specWeight', globalModel[n].props.specWeight, 'N/m3');
+                        setSidebarReadout('speedOfSound', globalModel[n].props.speedOfSound, 'm/s');
+                    }
+                }
+
+                if (n === 'FLUID' && globalModel[n].props.fluidName === 'Crude Oil' && typeof updateCrudeOilProperties === 'function') {
+                    const crudeKeys = ['crudeApiGravity', 'crudeViscosity40C', 'crudeViscosity100C', 'crudeRvp'];
+                    if (crudeKeys.includes(k)) {
+                        updateCrudeOilProperties();
+                        refreshFluidBasisReadouts(globalModel[n]);
+                        updateSimulation({ renderSidebarAfter: false });
+                        return;
                     }
                 }
                 
@@ -168,6 +201,35 @@ function renderSidebar(nodeId) {
 
                 if (globalModel[n].type === 'pipe' && k === 'routeStyle') {
                     drawConnections();
+                    return;
+                }
+
+                if (globalModel[n].type === 'source' && k === 'temperatureMode') {
+                    if (typeof syncSourceTemperatureFromFluidBasis === 'function') {
+                        syncSourceTemperatureFromFluidBasis(n);
+                    }
+                    renderSidebar(n);
+                    updateSimulation();
+                    return;
+                }
+
+                if (globalModel[n].type === 'source' && k === 'flowInputMode') {
+                    if (v === SOURCE_FLOW_MODE_MASS) {
+                        globalModel[n].props.massFlow = calculateSourceMassFlowFromVolumetric(globalModel[n].props.flow);
+                    } else {
+                        globalModel[n].props.flow = calculateSourceVolumetricFlowFromMass(globalModel[n].props.massFlow);
+                    }
+                    syncSourceFlowFromInputMode(n);
+                    renderSidebar(n);
+                    updateSimulation();
+                    return;
+                }
+
+                if (globalModel[n].type === 'source' && (k === 'massFlow' || k === 'flow')) {
+                    syncSourceFlowFromInputMode(n);
+                    setSidebarReadout('source-flow', globalModel[n].props.flow, 'm3/h');
+                    setSidebarReadout('source-mass-flow', globalModel[n].props.massFlow, 'kg/h');
+                    updateSimulation({ renderSidebarAfter: false });
                     return;
                 }
                 
@@ -212,8 +274,8 @@ function renderSidebar(nodeId) {
                     <option value="Custom" ${node.props.fluidName === 'Custom' ? 'selected' : ''}>Custom Fluid</option>
                     <option value="Water" ${node.props.fluidName === 'Water' ? 'selected' : ''}>Water (Auto)</option>
                     <option value="Methanol" ${node.props.fluidName === 'Methanol' ? 'selected' : ''}>Methanol (Auto)</option>
-                    <option value="Palm Oil" ${node.props.fluidName === 'Palm Oil' ? 'selected' : ''}>Palm Oil (Auto)</option>
-                    <option value="Crude Oil" ${node.props.fluidName === 'Crude Oil' ? 'selected' : ''}>Crude Oil (Auto)</option>
+                    <option value="Palm Oil" ${node.props.fluidName === 'Palm Oil' ? 'selected' : ''}>Palm Oil (Liquid Table)</option>
+                    <option value="Crude Oil" ${node.props.fluidName === 'Crude Oil' ? 'selected' : ''}>Crude Oil (Estimated)</option>
                 </select>
             </td>
         `;
@@ -255,26 +317,23 @@ function renderSidebar(nodeId) {
                 if (node.props.fluidName === 'Palm Oil') updatePalmOilProperties();
                 if (node.props.fluidName === 'Crude Oil') updateCrudeOilProperties();
                 
-                // Real-time update DOM to avoid losing focus
-                const ids = ['density', 'sg', 'dynViscosity', 'viscosity', 'vaporPressure', 'specVolume', 'specWeight', 'speedOfSound'];
-                ids.forEach(k => {
-                    const el = document.querySelector('td.prop-value[data-key="'+k+'"]');
-                    if(el) {
-                        let unit = '';
-                        if(k==='density') unit = ' kg/m3';
-                        else if(k==='dynViscosity') unit = ' cP';
-                        else if(k==='viscosity') unit = ' cSt';
-                        else if(k==='vaporPressure') unit = ' bar a';
-                        else if(k==='specVolume') unit = ' m3/kg';
-                        else if(k==='specWeight') unit = ' N/m3';
-                        else if(k==='speedOfSound') unit = ' m/s';
-                        
-                        el.textContent = (k==='specVolume'?node.props[k].toFixed(6):node.props[k].toFixed(3)) + unit;
-                    }
-                });
+                refreshFluidBasisReadouts(node);
             }
             updateSimulation();
         });
+
+        if (node.props.fluidName === 'Crude Oil' && typeof normalizeCrudeOilProps === 'function') {
+            normalizeCrudeOilProps(node.props);
+
+            const crudeHeader = document.createElement('tr');
+            crudeHeader.innerHTML = '<td colspan="2" style="background:#eee; font-weight:bold; padding:4px 8px; text-align:center;">Crude Oil Basis</td>';
+            tbody.appendChild(crudeHeader);
+
+            addRow('API Gravity @ 60F', node.props.crudeApiGravity, 'crudeApiGravity', false, 'deg API', 'number');
+            addRow('Kinematic Visc. @ 40C', node.props.crudeViscosity40C, 'crudeViscosity40C', false, 'cSt', 'number');
+            addRow('Kinematic Visc. @ 100C', node.props.crudeViscosity100C, 'crudeViscosity100C', false, 'cSt', 'number');
+            addRow('RVP @ 37.8C', node.props.crudeRvp, 'crudeRvp', false, 'bar a', 'number');
+        }
         
         const isAuto = node.props.fluidName === 'Water' || node.props.fluidName === 'Methanol' || node.props.fluidName === 'Palm Oil' || node.props.fluidName === 'Crude Oil';
         
@@ -293,6 +352,9 @@ function renderSidebar(nodeId) {
             addRow('Kinematic Visc.', node.props.viscosity, 'viscosity', true, 'cSt');
             addRow('Vapor Pressure', node.props.vaporPressure, 'vaporPressure', isAuto, 'bar a');
             addRow('Specific Heat', node.props.specificHeat, 'specificHeat', isAuto, 'kJ/kg.K');
+            if (node.props.thermalConductivity !== undefined) {
+                addRow('Thermal Cond.', node.props.thermalConductivity, 'thermalConductivity', true, 'W/m.K');
+            }
             addRow('Bulk Modulus', node.props.bulkModulus, 'bulkModulus', isAuto, 'GPa');
             
             const extHeader = document.createElement('tr');
@@ -304,6 +366,10 @@ function renderSidebar(nodeId) {
             addRow('Speed of Sound', node.props.speedOfSound, 'speedOfSound', true, 'm/s');
         }
     } else if (node.type === 'pump') {
+        if (typeof normalizePumpProps === 'function') {
+            normalizePumpProps(node.props);
+        }
+
         const modeTr = document.createElement('tr');
         modeTr.innerHTML = `
             <td class="prop-label">Input Mode</td>
@@ -328,6 +394,7 @@ function renderSidebar(nodeId) {
             addRow('Design Flow', node.props.designFlow, 'designFlow', false, 'm3/h', 'number');
             addRow('Design Head', node.props.designHead, 'designHead', false, 'm', 'number');
             addRow('Design Eff.', node.props.designEfficiency, 'designEfficiency', false, '%', 'number');
+            addRow('NPSHr @ BEP', node.props.designNpshr, 'designNpshr', false, 'm', 'number');
         } else {
             // Advanced curve table
             const tr = document.createElement('tr');
@@ -407,6 +474,18 @@ function renderSidebar(nodeId) {
                 });
             });
         }
+
+        const hiHeader = document.createElement('tr');
+        hiHeader.innerHTML = '<td colspan="2" style="background:#eee; font-weight:bold; padding:4px 8px; text-align:center;">HI Operating Checks</td>';
+        tbody.appendChild(hiHeader);
+
+        addRow('BEP Flow', node.props.bepFlow, 'bepFlow', false, 'm3/h', 'number');
+        addRow('POR Min', node.props.porMinPercent, 'porMinPercent', false, '% BEP', 'number');
+        addRow('POR Max', node.props.porMaxPercent, 'porMaxPercent', false, '% BEP', 'number');
+        addRow('AOR Min', node.props.aorMinPercent, 'aorMinPercent', false, '% BEP', 'number');
+        addRow('AOR Max', node.props.aorMaxPercent, 'aorMaxPercent', false, '% BEP', 'number');
+        addRow('Min NPSH Ratio', node.props.minNpshMarginRatio, 'minNpshMarginRatio', false, '', 'number');
+        addRow('Min NPSH Margin', node.props.minNpshMargin, 'minNpshMargin', false, 'm', 'number');
         
         // Add a separator for results
         const resHeader = document.createElement('tr');
@@ -416,9 +495,15 @@ function renderSidebar(nodeId) {
         addRow('Flow Rate (Q)', node.results.flow, 'result-flow', true, 'm3/h');
         addRow('Total Head', node.results.head, 'result-head', true, 'm');
         addRow('Efficiency', node.results.efficiency, 'result-efficiency', true, '%');
-        addRow('Hyd. Power', node.results.power, 'result-power', true, 'kW');
+        addRow('Shaft Power', node.results.power, 'result-power', true, 'kW');
         addRow('NPSH Avail.', node.results.npsha, 'result-npsha', true, 'm');
         addRow('NPSH Req.', node.results.npshr, 'result-npshr', true, 'm');
+        addRow('NPSH Margin', node.results.npshMargin, 'result-npsh-margin', true, 'm');
+        addRow('NPSH Ratio', node.results.npshRatio, 'result-npsh-ratio', true, '');
+        addRow('BEP Flow Ratio', node.results.bepPercent, 'result-bep-percent', true, '% BEP');
+        addRow('Operating Region', node.results.operatingRegion, 'result-operating-region', true, '');
+        addRow('Status', node.results.status, 'result-status', true, '');
+        addRow('Warnings', (node.results.warnings || []).join(' | ') || 'OK', 'result-warnings', true, '');
     } else if (node.type === 'pipe') {
         if (node.props.routeStyle === undefined) node.props.routeStyle = 'Straight';
         normalizePipeProps(node.props);
