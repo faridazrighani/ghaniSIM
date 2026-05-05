@@ -27,6 +27,39 @@ function pressureHeadToBar(pressureHead, density) {
     return toHydraulicNumber(pressureHead) * rho * getHydraulicGravity() / 100000;
 }
 
+function isSinkPressureBoundary(node) {
+    return !!(node && node.type === 'sink' && node.props?.active !== 'Inactive' && node.props?.boundaryMode !== 'Flow Demand');
+}
+
+function isSinkFlowDemandBoundary(node) {
+    return !!(node && node.type === 'sink' && node.props?.active !== 'Inactive' && node.props?.boundaryMode === 'Flow Demand');
+}
+
+function getPipeVelocityHead(pipeId, flowRateM3H, model, segmentSelector = 'outlet') {
+    const pipe = model[pipeId];
+    if (!pipe || pipe.type !== 'pipe' || !pipe.props || typeof calculatePipeHydraulicSegments !== 'function') return 0;
+
+    const segments = calculatePipeHydraulicSegments(flowRateM3H, pipe.props);
+    if (!segments.length) return 0;
+
+    let segment = segments[segments.length - 1];
+    if (segmentSelector === 'inlet') segment = segments[0];
+    if (segmentSelector === 'average') {
+        const average = segments.reduce((sum, item) => sum + Math.pow(item.velocity, 2) / (2 * getHydraulicGravity()), 0) / segments.length;
+        return Number.isFinite(average) ? average : 0;
+    }
+
+    const velocityHead = Math.pow(segment.velocity, 2) / (2 * getHydraulicGravity());
+    return Number.isFinite(velocityHead) ? velocityHead : 0;
+}
+
+function getBoundaryPipeVelocityHead(node, flowRateM3H, path, model) {
+    if (!node || !path || !Array.isArray(path.steps) || path.steps.length === 0) return 0;
+    const terminalStep = path.steps[path.steps.length - 1];
+    if (!terminalStep || (terminalStep.to !== node.name && model[terminalStep.to] !== node)) return 0;
+    return getPipeVelocityHead(terminalStep.pipeId, flowRateM3H, model, 'outlet');
+}
+
 function isHydraulicPassThroughNode(node) {
     return !!(node && HYDRAULIC_PASS_THROUGH_TYPES.includes(node.type));
 }
@@ -35,7 +68,7 @@ function isHydraulicBoundaryNode(node, direction) {
     if (!node) return false;
     if (node.type === 'tank') return true;
     if (direction === 'upstream') return node.type === 'source';
-    if (direction === 'downstream') return node.type === 'sink';
+    if (direction === 'downstream') return node.type === 'sink' && node.props?.active !== 'Inactive';
     return node.type === 'source' || node.type === 'sink';
 }
 
@@ -47,10 +80,18 @@ function getNodeHydraulicElevation(node) {
     return toHydraulicNumber(node.props.elevation);
 }
 
-function getBoundaryHydraulicHead(node, density) {
+function getBoundaryHydraulicHead(node, density, flowRateM3H = 0, path = null, model = globalModel) {
     if (!node || !node.props) return null;
+    if (isSinkFlowDemandBoundary(node)) return null;
+
     const pressureHead = pressureBarToHead(node.props.pressure, density);
-    return pressureHead + getNodeHydraulicElevation(node);
+    let boundaryHead = pressureHead + getNodeHydraulicElevation(node);
+
+    if (node.type === 'sink' && node.props.pressureBasis === 'Static') {
+        boundaryHead += getBoundaryPipeVelocityHead(node, flowRateM3H, path, model);
+    }
+
+    return boundaryHead;
 }
 
 function traceHydraulicPath(startNodeId, direction, model, connectionList) {
@@ -186,8 +227,10 @@ function createPumpHydraulicContext(pumpId, model, connectionList, density, vapo
 function calculatePumpSystemHead(context, flowRateM3H) {
     if (!context || !context.isComplete) return null;
 
-    const suctionBoundaryHead = getBoundaryHydraulicHead(context.suctionBoundary, context.density);
-    const dischargeBoundaryHead = getBoundaryHydraulicHead(context.dischargeBoundary, context.density);
+    if (isSinkFlowDemandBoundary(context.dischargeBoundary)) return null;
+
+    const suctionBoundaryHead = getBoundaryHydraulicHead(context.suctionBoundary, context.density, flowRateM3H, context.suctionPath, globalModel);
+    const dischargeBoundaryHead = getBoundaryHydraulicHead(context.dischargeBoundary, context.density, flowRateM3H, context.dischargePath, globalModel);
     if (suctionBoundaryHead === null || dischargeBoundaryHead === null) return null;
 
     const suctionLoss = calculateHydraulicPathLossHead(
@@ -212,8 +255,8 @@ function calculatePumpSystemHead(context, flowRateM3H) {
 function calculatePumpHydraulicSnapshot(context, flowRateM3H, pumpHead) {
     if (!context || !context.isComplete) return null;
 
-    const suctionBoundaryHead = getBoundaryHydraulicHead(context.suctionBoundary, context.density);
-    const dischargeBoundaryHead = getBoundaryHydraulicHead(context.dischargeBoundary, context.density);
+    const suctionBoundaryHead = getBoundaryHydraulicHead(context.suctionBoundary, context.density, flowRateM3H, context.suctionPath, globalModel);
+    const dischargeBoundaryHead = getBoundaryHydraulicHead(context.dischargeBoundary, context.density, flowRateM3H, context.dischargePath, globalModel);
     const suctionLoss = calculateHydraulicPathLossHead(
         context.suctionPath,
         flowRateM3H,
@@ -251,6 +294,55 @@ function calculatePumpHydraulicSnapshot(context, flowRateM3H, pumpHead) {
     };
 }
 
+function calculatePumpFlowDemandSnapshot(context, flowRateM3H, pumpHead) {
+    if (!context || !context.isComplete || !isSinkFlowDemandBoundary(context.dischargeBoundary)) return null;
+
+    const suctionBoundaryHead = getBoundaryHydraulicHead(context.suctionBoundary, context.density, flowRateM3H, context.suctionPath, globalModel);
+    const suctionLoss = calculateHydraulicPathLossHead(
+        context.suctionPath,
+        flowRateM3H,
+        globalModel,
+        context.density,
+        context.pumpId
+    );
+    const dischargeLoss = calculateHydraulicPathLossHead(
+        context.dischargePath,
+        flowRateM3H,
+        globalModel,
+        context.density,
+        context.dischargePath.boundaryId
+    );
+    if ([suctionBoundaryHead, suctionLoss, dischargeLoss].some(value => value === null)) {
+        return null;
+    }
+
+    const pumpElevation = getNodeHydraulicElevation(context.pump);
+    const boundaryElevation = getNodeHydraulicElevation(context.dischargeBoundary);
+    const terminalVelocityHead = getBoundaryPipeVelocityHead(context.dischargeBoundary, flowRateM3H, context.dischargePath, globalModel);
+    const suctionHeadAtPump = suctionBoundaryHead - suctionLoss;
+    const dischargeHeadAtPump = suctionHeadAtPump + pumpHead;
+    const dischargeBoundaryHead = dischargeHeadAtPump - dischargeLoss;
+    const vaporPressureHead = context.vaporPressurePa / (context.density * getHydraulicGravity());
+    const sinkStaticPressureBar = pressureHeadToBar(dischargeBoundaryHead - boundaryElevation - terminalVelocityHead, context.density);
+    const sinkStagnationPressureBar = pressureHeadToBar(dischargeBoundaryHead - boundaryElevation, context.density);
+
+    return {
+        suctionBoundaryHead,
+        dischargeBoundaryHead,
+        suctionLoss,
+        dischargeLoss,
+        suctionHeadAtPump,
+        dischargeHeadAtPump,
+        terminalVelocityHead,
+        sinkStaticPressureBar,
+        sinkStagnationPressureBar,
+        npsha: suctionHeadAtPump - pumpElevation - vaporPressureHead,
+        suctionPressureBar: pressureHeadToBar(suctionHeadAtPump - pumpElevation, context.density),
+        dischargePressureBar: pressureHeadToBar(dischargeHeadAtPump - pumpElevation, context.density),
+        systemHead: pumpHead
+    };
+}
+
 function resetHydraulicPipeResults(model) {
     Object.keys(model).forEach(nodeId => {
         const node = model[nodeId];
@@ -279,12 +371,20 @@ function setPipeHydraulicResult(model, step, flowRateM3H, inletHead, outletHead,
     const toElevation = getNodeHydraulicElevation(model[step.to]);
     const midHead = (inletHead + outletHead) / 2;
     const midElevation = (fromElevation + toElevation) / 2;
+    const inletVelocityHead = getPipeVelocityHead(step.pipeId, flowRateM3H, model, 'inlet');
+    const outletVelocityHead = getPipeVelocityHead(step.pipeId, flowRateM3H, model, 'outlet');
+    const averageVelocityHead = getPipeVelocityHead(step.pipeId, flowRateM3H, model, 'average');
 
     const result = {
         flow: Number(flowRateM3H.toFixed(3)),
-        pressure: Number(pressureHeadToBar(midHead - midElevation, density).toFixed(3)),
-        inletPressure: Number(pressureHeadToBar(inletHead - fromElevation, density).toFixed(3)),
-        outletPressure: Number(pressureHeadToBar(outletHead - toElevation, density).toFixed(3)),
+        pressure: Number(pressureHeadToBar(midHead - midElevation - averageVelocityHead, density).toFixed(3)),
+        inletPressure: Number(pressureHeadToBar(inletHead - fromElevation - inletVelocityHead, density).toFixed(3)),
+        outletPressure: Number(pressureHeadToBar(outletHead - toElevation - outletVelocityHead, density).toFixed(3)),
+        inletStagnationPressure: Number(pressureHeadToBar(inletHead - fromElevation, density).toFixed(3)),
+        outletStagnationPressure: Number(pressureHeadToBar(outletHead - toElevation, density).toFixed(3)),
+        velocityHead: Number(averageVelocityHead.toFixed(3)),
+        inletHydraulicHead: Number(inletHead.toFixed(3)),
+        outletHydraulicHead: Number(outletHead.toFixed(3)),
         hydraulicHead: Number(midHead.toFixed(3)),
         pressureCalculated: true
     };

@@ -119,11 +119,11 @@ function getObjectPortsHtml(type) {
     }
 
     if (type === 'source') {
-        return `<div class="port outlet" style="top: 50%; right: -5px; transform: translateY(-50%);"></div>`;
+        return `<div class="port outlet" style="top: 50%; right: 5px; transform: translateY(-50%);"></div>`;
     }
 
     if (type === 'sink') {
-        return `<div class="port inlet" style="top: 50%; left: -5px; transform: translateY(-50%);"></div>`;
+        return `<div class="port inlet" style="top: 50%; left: 5px; transform: translateY(-50%);"></div>`;
     }
 
     if (type === 'junction') {

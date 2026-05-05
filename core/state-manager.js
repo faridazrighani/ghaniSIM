@@ -15,6 +15,10 @@ const SOURCE_TEMP_MODE_CUSTOM = 'Custom';
 const SOURCE_FLOW_MODE_VOLUME = 'Volumetric Flow';
 const SOURCE_FLOW_MODE_MASS = 'Mass Flow';
 const SOURCE_DEFAULT_MASS_FLOW_KGH = 9500;
+const SINK_BOUNDARY_MODE_PRESSURE = 'Outlet Pressure';
+const SINK_BOUNDARY_MODE_FLOW = 'Flow Demand';
+const SINK_ACTIVE = 'Active';
+const SINK_INACTIVE = 'Inactive';
 
 const globalModel = {
     "FLUID":  { 
@@ -51,6 +55,25 @@ let nextPipeRouteStyle = 'Straight';
 // --- State Modifiers ---
 
 function createDefaultResults(type) {
+    if (type === 'sink') {
+        return {
+            attachedPipe: '',
+            boundaryPressure: null,
+            calculatedPressure: null,
+            staticPressure: null,
+            stagnationPressure: null,
+            pressureResidual: null,
+            flow: null,
+            massFlow: null,
+            temperature: null,
+            hydraulicHead: null,
+            pressureBasis: 'Static',
+            boundaryMode: 'Outlet Pressure',
+            status: '-',
+            warnings: []
+        };
+    }
+
     if (type !== 'pump') return null;
 
     return {
@@ -78,7 +101,7 @@ function createDefaultResults(type) {
 function ensureNodeResults(node) {
     if (!node.results) {
         node.results = createDefaultResults(node.type) || {};
-    } else if (node.type === 'pump') {
+    } else if (node.type === 'pump' || node.type === 'sink') {
         const defaults = createDefaultResults(node.type) || {};
         Object.keys(defaults).forEach(key => {
             if (node.results[key] === undefined) node.results[key] = defaults[key];
@@ -197,6 +220,30 @@ function normalizeSourceProps(source) {
     }
     const sourceId = Object.keys(globalModel).find(nodeId => globalModel[nodeId] === source);
     if (sourceId) syncSourceFlowFromInputMode(sourceId);
+}
+
+function normalizeSinkProps(sink) {
+    if (!sink || sink.type !== 'sink') return;
+    if (!sink.props) sink.props = {};
+    if (!sink.props.active) sink.props.active = SINK_ACTIVE;
+    if (!sink.props.boundaryMode) sink.props.boundaryMode = SINK_BOUNDARY_MODE_PRESSURE;
+    if (!sink.props.pressureBasis) sink.props.pressureBasis = 'Static';
+    if (sink.props.pressure === undefined || sink.props.pressure === null || sink.props.pressure === '') {
+        sink.props.pressure = 1.013;
+    }
+    if (sink.props.elevation === undefined || sink.props.elevation === null || sink.props.elevation === '') {
+        sink.props.elevation = 0;
+    }
+    if (sink.props.demandFlow === undefined || sink.props.demandFlow === null || sink.props.demandFlow === '') {
+        sink.props.demandFlow = 0;
+    }
+}
+
+function normalizeAllSinkProps() {
+    Object.keys(globalModel).forEach(nodeId => {
+        const node = globalModel[nodeId];
+        if (node && node.type === 'sink') normalizeSinkProps(node);
+    });
 }
 
 function syncSourceTemperatureFromFluidBasis(sourceId) {

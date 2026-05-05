@@ -493,18 +493,26 @@ textarea {
     font-size: 11px;
     font-weight: 600;
     color: #111;
-    margin-top: 4px;
+    margin-top: -1px;
     text-align: center;
-    line-height: 1.2;
+    line-height: 1.05;
 }
 .object-desc {
     font-size: 10px;
     font-weight: normal;
     color: #444;
+    display: none;
+}
+
+.object-type-valve .object-name,
+.object-type-checkValve .object-name {
+    margin-top: -9px;
 }
 
 .prop-value[data-key="result-status"],
-.prop-value[data-key="result-warnings"] {
+.prop-value[data-key="result-warnings"],
+.prop-value[data-key="sink-status"],
+.prop-value[data-key="sink-warnings"] {
     color: #9a3412;
     font-weight: 600;
     white-space: normal;
@@ -583,6 +591,14 @@ textarea {
 }
 
 .prop-table tr:nth-child(even) td { background-color: #fafafa; }
+
+.prop-section-header {
+    background: #eeeeee !important;
+    color: #123b5a;
+    font-weight: 700;
+    text-align: center;
+    padding: 6px 8px !important;
+}
 
 .prop-label { color: #666; width: 40%; }
 .prop-value {
@@ -670,25 +686,29 @@ select.prop-input-field {
 .modal-body { padding: 16px; flex: 1; display: flex; flex-direction: column; min-height: 0;}
 
 /* Segment Table Styles */
-.pipe-result-grid {
+.pipe-result-grid,
+.boundary-result-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
 }
-.pipe-result-card {
+.pipe-result-card,
+.boundary-result-card {
     min-width: 0;
     padding: 8px;
     border: 1px solid #d8e6f2;
     border-radius: 4px;
     background: #f8fbfd;
 }
-.pipe-result-card span {
+.pipe-result-card span,
+.boundary-result-card span {
     display: block;
     color: #52606d;
     font-size: 10px;
     line-height: 1.2;
 }
-.pipe-result-card strong {
+.pipe-result-card strong,
+.boundary-result-card strong {
     display: block;
     margin-top: 3px;
     color: #123b5a;
@@ -697,7 +717,8 @@ select.prop-input-field {
     font-variant-numeric: tabular-nums;
     word-break: break-word;
 }
-.pipe-result-card-wide {
+.pipe-result-card-wide,
+.boundary-result-card-wide {
     grid-column: 1 / -1;
 }
 .segment-table-scroll {

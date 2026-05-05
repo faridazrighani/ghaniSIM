@@ -4,7 +4,7 @@ function isSidebarEditActive() {
 }
 
 function setSidebarReadout(key, value, unit = '') {
-    const el = document.querySelector(`td.prop-value[data-key="${key}"]`);
+    const el = document.querySelector(`.prop-value[data-key="${key}"], strong[data-key="${key}"]`);
     if (!el) return;
     if (value === null || value === undefined || value === '') {
         el.textContent = '-';
@@ -229,6 +229,13 @@ function renderSidebar(nodeId) {
                     syncSourceFlowFromInputMode(n);
                     setSidebarReadout('source-flow', globalModel[n].props.flow, 'm3/h');
                     setSidebarReadout('source-mass-flow', globalModel[n].props.massFlow, 'kg/h');
+                    updateSimulation({ renderSidebarAfter: false });
+                    return;
+                }
+
+                if (globalModel[n].type === 'sink' && k === 'boundaryMode') {
+                    if (typeof normalizeSinkProps === 'function') normalizeSinkProps(globalModel[n]);
+                    renderSidebar(n);
                     updateSimulation({ renderSidebarAfter: false });
                     return;
                 }

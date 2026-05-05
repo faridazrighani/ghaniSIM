@@ -74,6 +74,76 @@ function renderSourceAttachmentControls(nodeId, node, addRow, tbody) {
     });
 }
 
+function appendSectionHeader(tbody, title) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="2" class="prop-section-header">${title}</td>`;
+    tbody.appendChild(tr);
+}
+
+function renderSinkReadoutCards(node, tbody) {
+    const results = node.results || {};
+    const warnings = results.warnings || [];
+    const calculatedPressureLabel = results.boundaryMode === 'Flow Demand'
+        ? 'Required Boundary P'
+        : 'Calc. Boundary P';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+        <td colspan="2" style="padding: 10px 12px;">
+            <div class="boundary-result-grid">
+                <div class="boundary-result-card">
+                    <span>Attached Pipe</span>
+                    <strong class="prop-value" data-key="sink-attached-pipe">${escapeHtml(results.attachedPipe || '-')}</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Boundary Pressure</span>
+                    <strong class="prop-value" data-key="sink-boundary-pressure">${formatReadoutValue(results.boundaryPressure)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>${calculatedPressureLabel}</span>
+                    <strong class="prop-value" data-key="sink-calculated-pressure">${formatReadoutValue(results.calculatedPressure)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Pressure Residual</span>
+                    <strong class="prop-value" data-key="sink-pressure-residual">${formatReadoutValue(results.pressureResidual)} bar</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Static Pipe P</span>
+                    <strong class="prop-value" data-key="sink-static-pressure">${formatReadoutValue(results.staticPressure)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Stagnation P</span>
+                    <strong class="prop-value" data-key="sink-stagnation-pressure">${formatReadoutValue(results.stagnationPressure)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Flow Rate</span>
+                    <strong class="prop-value" data-key="sink-flow">${formatReadoutValue(results.flow)} m3/h</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Mass Flow</span>
+                    <strong class="prop-value" data-key="sink-mass-flow">${formatReadoutValue(results.massFlow)} kg/h</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Temperature</span>
+                    <strong class="prop-value" data-key="sink-temperature">${formatReadoutValue(results.temperature)} deg C</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Hydraulic Head</span>
+                    <strong class="prop-value" data-key="sink-hydraulic-head">${formatReadoutValue(results.hydraulicHead)} m</strong>
+                </div>
+                <div class="boundary-result-card boundary-result-card-wide">
+                    <span>Status</span>
+                    <strong class="prop-value" data-key="sink-status">${escapeHtml(results.status || '-')}</strong>
+                </div>
+                <div class="boundary-result-card boundary-result-card-wide">
+                    <span>Warnings</span>
+                    <strong class="prop-value" data-key="sink-warnings">${escapeHtml(warnings.join(' | ') || 'OK')}</strong>
+                </div>
+            </div>
+        </td>
+    `;
+    tbody.appendChild(tr);
+}
+
 function renderObjectProperties(type, nodeId, node, addRow, tbody) {
     const schema = EQUIPMENT_SCHEMAS[type];
     if (!schema) {
@@ -123,6 +193,27 @@ function renderObjectProperties(type, nodeId, node, addRow, tbody) {
         }
 
         renderSourceAttachmentControls(nodeId, node, addRow, tbody);
+        return;
+    }
+
+    if (type === 'sink') {
+        if (typeof normalizeSinkProps === 'function') normalizeSinkProps(node);
+        if (typeof ensureNodeResults === 'function') ensureNodeResults(node);
+        if (typeof updateSinkReadout === 'function') updateSinkReadout(nodeId);
+
+        appendSectionHeader(tbody, 'Boundary Conditions');
+        addRow('Active', node.props.active, 'active', false, '', 'select', ['Active', 'Inactive']);
+        addRow('Boundary Mode', node.props.boundaryMode, 'boundaryMode', false, '', 'select', ['Outlet Pressure', 'Flow Demand']);
+        if (node.props.boundaryMode === 'Flow Demand') {
+            addRow('Flow Demand', node.props.demandFlow, 'demandFlow', false, 'm3/h', 'number');
+        } else {
+            addRow('Outlet Pressure', node.props.pressure, 'pressure', false, 'bar a', 'number');
+        }
+        addRow('Pressure Basis', node.props.pressureBasis, 'pressureBasis', false, '', 'select', ['Static', 'Stagnation']);
+        addRow('Elevation', node.props.elevation, 'elevation', false, 'm', 'number');
+
+        appendSectionHeader(tbody, 'Calculated Outlet Readout');
+        renderSinkReadoutCards(node, tbody);
         return;
     }
 

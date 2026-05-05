@@ -42,6 +42,58 @@ function resetPumpCalculatedResults(pump, status, warnings = []) {
     pump.results.dischargeLoss = null;
 }
 
+function refreshPumpUiReadouts(pumpId, pump) {
+    if (currentSelectedNode === pumpId || activeChartPumpId === pumpId) {
+        updatePumpChart(pumpId);
+    }
+
+    if (currentSelectedNode === pumpId) {
+        updatePumpResultReadouts(pump);
+    }
+}
+
+function applyPumpOperatingPointResults(pump, hydraulicContext, hydraulicSnapshot, opFlow, opHead, density, performanceModel, additionalWarnings = []) {
+    const eff = performanceModel.getEfficiency(opFlow);
+    const hydraulicPower = (opFlow * opHead * density * GRAVITY) / 3.6e6;
+    const power = eff > 0 ? hydraulicPower / (eff / 100) : null;
+    const npshr = performanceModel.getNpshr(opFlow);
+    const npshEvaluation = evaluateNpshMargin(hydraulicSnapshot.npsha, npshr, pump.props);
+    const operatingRegion = classifyPumpOperatingRegion(opFlow, pump.props);
+    const warnings = [...additionalWarnings];
+
+    if (operatingRegion.status === 'AOR') {
+        warnings.push('Operating point is outside POR; review reliability/efficiency.');
+    } else if (operatingRegion.status === 'Outside AOR') {
+        warnings.push('Operating point is outside configured AOR.');
+    }
+
+    if (npshEvaluation.status !== 'OK') {
+        warnings.push(npshEvaluation.message);
+    }
+
+    if (eff <= 0) {
+        warnings.push('Pump efficiency is zero or invalid at operating point.');
+    }
+
+    applyHydraulicPathResults(hydraulicContext, hydraulicSnapshot, opFlow);
+    pump.results.flow = opFlow.toFixed(2);
+    pump.results.head = opHead.toFixed(2);
+    pump.results.power = power === null ? null : power.toFixed(2);
+    pump.results.npsha = hydraulicSnapshot.npsha.toFixed(2);
+    pump.results.npshr = npshr.toFixed(2);
+    pump.results.npshMargin = npshEvaluation.margin === null ? null : npshEvaluation.margin.toFixed(2);
+    pump.results.npshRatio = npshEvaluation.ratio === null ? null : npshEvaluation.ratio.toFixed(2);
+    pump.results.bepPercent = operatingRegion.percent.toFixed(1);
+    pump.results.operatingRegion = operatingRegion.status;
+    pump.results.status = warnings.length ? 'Warning' : 'OK';
+    pump.results.warnings = warnings;
+    pump.results.efficiency = eff.toFixed(2);
+    pump.results.suctionPressure = hydraulicSnapshot.suctionPressureBar.toFixed(3);
+    pump.results.dischargePressure = hydraulicSnapshot.dischargePressureBar.toFixed(3);
+    pump.results.suctionLoss = hydraulicSnapshot.suctionLoss.toFixed(2);
+    pump.results.dischargeLoss = hydraulicSnapshot.dischargeLoss.toFixed(2);
+}
+
 function getInstrumentLink(instrumentId) {
     const instrument = globalModel[instrumentId];
     const attachedTo = instrument && instrument.props ? instrument.props.attachedTo : null;
@@ -123,6 +175,142 @@ function updateAllInstrumentReadouts() {
     });
 }
 
+function getSinkPipeConnection(sinkId) {
+    return (connections || []).find(conn => conn.to === sinkId || conn.from === sinkId) || null;
+}
+
+function getSinkPipeConnections(sinkId) {
+    return (connections || []).filter(conn => conn.to === sinkId || conn.from === sinkId);
+}
+
+function getPipePressureForNodeSide(pipe, conn, nodeId) {
+    if (!pipe || !pipe.results || !pipe.results.pressureCalculated) return null;
+    if (conn.to === nodeId && pipe.results.outletPressure !== null && pipe.results.outletPressure !== undefined) {
+        return parseFloat(pipe.results.outletPressure);
+    }
+    if (conn.from === nodeId && pipe.results.inletPressure !== null && pipe.results.inletPressure !== undefined) {
+        return parseFloat(pipe.results.inletPressure);
+    }
+    return pipe.results.pressure === null || pipe.results.pressure === undefined ? null : parseFloat(pipe.results.pressure);
+}
+
+function getPipeStagnationPressureForNodeSide(pipe, conn, nodeId) {
+    if (!pipe || !pipe.results || !pipe.results.pressureCalculated) return null;
+    if (conn.to === nodeId && pipe.results.outletStagnationPressure !== null && pipe.results.outletStagnationPressure !== undefined) {
+        return parseFloat(pipe.results.outletStagnationPressure);
+    }
+    if (conn.from === nodeId && pipe.results.inletStagnationPressure !== null && pipe.results.inletStagnationPressure !== undefined) {
+        return parseFloat(pipe.results.inletStagnationPressure);
+    }
+    return null;
+}
+
+function getPipeHydraulicHeadForNodeSide(pipe, conn, nodeId) {
+    if (!pipe || !pipe.results || !pipe.results.pressureCalculated) return null;
+    if (conn.to === nodeId && pipe.results.outletHydraulicHead !== null && pipe.results.outletHydraulicHead !== undefined) {
+        return parseFloat(pipe.results.outletHydraulicHead);
+    }
+    if (conn.from === nodeId && pipe.results.inletHydraulicHead !== null && pipe.results.inletHydraulicHead !== undefined) {
+        return parseFloat(pipe.results.inletHydraulicHead);
+    }
+    return pipe.results.hydraulicHead === null || pipe.results.hydraulicHead === undefined ? null : parseFloat(pipe.results.hydraulicHead);
+}
+
+function updateSinkReadout(sinkId) {
+    const sink = globalModel[sinkId];
+    if (!sink || sink.type !== 'sink') return;
+    if (typeof normalizeSinkProps === 'function') normalizeSinkProps(sink);
+    ensureNodeResults(sink);
+
+    const fluid = globalModel.FLUID;
+    const density = Math.max(parseFloat(fluid?.props?.density) || 1000, 1);
+    const temperature = parseFloat(fluid?.props?.temp);
+    const vaporPressure = parseFloat(fluid?.props?.vaporPressure);
+    const sinkConnections = getSinkPipeConnections(sinkId);
+    const conn = sinkConnections[0] || null;
+    const pipe = conn ? globalModel[conn.pipeId] : null;
+    const flow = pipe && pipe.results && pipe.results.pressureCalculated ? parseFloat(pipe.results.flow) : null;
+    const staticPressure = getPipePressureForNodeSide(pipe, conn || {}, sinkId);
+    const stagnationPressure = getPipeStagnationPressureForNodeSide(pipe, conn || {}, sinkId);
+    const calculatedPressure = sink.props.pressureBasis === 'Stagnation'
+        ? stagnationPressure
+        : staticPressure;
+    const boundaryPressure = parseFloat(sink.props.pressure);
+    const selectedPressure = Number.isFinite(calculatedPressure) ? calculatedPressure : boundaryPressure;
+    const elevation = parseFloat(sink.props.elevation) || 0;
+    const hydraulicHead = getPipeHydraulicHeadForNodeSide(pipe, conn || {}, sinkId)
+        ?? (Number.isFinite(selectedPressure) ? pressureBarToHead(selectedPressure, density) + elevation : null);
+    const pressureResidual = sink.props.boundaryMode === SINK_BOUNDARY_MODE_PRESSURE
+        && Number.isFinite(calculatedPressure)
+        && Number.isFinite(boundaryPressure)
+            ? calculatedPressure - boundaryPressure
+            : null;
+    const warnings = [];
+
+    if (sink.props.active === SINK_INACTIVE) {
+        warnings.push('Sink is inactive and is not used as a hydraulic boundary.');
+    }
+    if (sinkConnections.length === 0) {
+        warnings.push('Sink is not connected to a pipeline.');
+    }
+    if (conn && (!pipe || !pipe.results || !pipe.results.pressureCalculated)) {
+        warnings.push('Connected pipe has no solved hydraulic result.');
+    }
+    if (sink.props.pressureBasis === 'Static' && sinkConnections.length > 1) {
+        warnings.push('Static pressure boundary should connect to one pipe only; use Stagnation for reservoir/header style boundaries.');
+    }
+    if (sink.props.boundaryMode === SINK_BOUNDARY_MODE_FLOW && (parseFloat(sink.props.demandFlow) || 0) <= 0) {
+        warnings.push('Flow Demand must be greater than zero.');
+    }
+    if (sink.props.boundaryMode === SINK_BOUNDARY_MODE_PRESSURE && Number.isFinite(pressureResidual) && Math.abs(pressureResidual) > 0.02) {
+        warnings.push('Boundary pressure residual exceeds 0.02 bar; check convergence or boundary basis.');
+    }
+    if (sink.props.boundaryMode === SINK_BOUNDARY_MODE_PRESSURE && Number.isFinite(boundaryPressure) && boundaryPressure <= 0) {
+        warnings.push('Outlet Pressure is absolute pressure; use 1.013 bar a for atmospheric discharge.');
+    }
+    if (Number.isFinite(selectedPressure) && Number.isFinite(vaporPressure) && selectedPressure <= vaporPressure) {
+        warnings.push('Calculated outlet pressure is at or below fluid vapor pressure.');
+    }
+
+    sink.results.attachedPipe = conn ? conn.pipeId : '';
+    sink.results.boundaryPressure = Number.isFinite(boundaryPressure) ? Number(boundaryPressure.toFixed(3)) : null;
+    sink.results.calculatedPressure = Number.isFinite(calculatedPressure) ? Number(calculatedPressure.toFixed(3)) : null;
+    sink.results.staticPressure = Number.isFinite(staticPressure) ? Number(staticPressure.toFixed(3)) : null;
+    sink.results.stagnationPressure = Number.isFinite(stagnationPressure) ? Number(stagnationPressure.toFixed(3)) : null;
+    sink.results.pressureResidual = Number.isFinite(pressureResidual) ? Number(pressureResidual.toFixed(4)) : null;
+    sink.results.flow = Number.isFinite(flow) ? Number(flow.toFixed(3)) : null;
+    sink.results.massFlow = Number.isFinite(flow) ? Number((flow * density).toFixed(3)) : null;
+    sink.results.temperature = Number.isFinite(temperature) ? Number(temperature.toFixed(3)) : null;
+    sink.results.hydraulicHead = Number.isFinite(hydraulicHead) ? Number(hydraulicHead.toFixed(3)) : null;
+    sink.results.pressureBasis = sink.props.pressureBasis;
+    sink.results.boundaryMode = sink.props.boundaryMode;
+    sink.results.status = warnings.length ? 'Warning' : 'OK';
+    sink.results.warnings = warnings;
+
+    if (currentSelectedNode === sinkId) {
+        setSidebarReadout('sink-attached-pipe', sink.results.attachedPipe || '-');
+        setSidebarReadout('sink-boundary-pressure', sink.results.boundaryPressure, 'bar a');
+        setSidebarReadout('sink-calculated-pressure', sink.results.calculatedPressure, 'bar a');
+        setSidebarReadout('sink-static-pressure', sink.results.staticPressure, 'bar a');
+        setSidebarReadout('sink-stagnation-pressure', sink.results.stagnationPressure, 'bar a');
+        setSidebarReadout('sink-pressure-residual', sink.results.pressureResidual, 'bar');
+        setSidebarReadout('sink-flow', sink.results.flow, 'm3/h');
+        setSidebarReadout('sink-mass-flow', sink.results.massFlow, 'kg/h');
+        setSidebarReadout('sink-temperature', sink.results.temperature, 'deg C');
+        setSidebarReadout('sink-hydraulic-head', sink.results.hydraulicHead, 'm');
+        setSidebarReadout('sink-status', sink.results.status, '');
+        setSidebarReadout('sink-warnings', warnings.join(' | ') || 'OK', '');
+    }
+}
+
+function updateAllSinkReadouts() {
+    Object.keys(globalModel).forEach(nodeId => {
+        if (globalModel[nodeId]?.type === 'sink') {
+            updateSinkReadout(nodeId);
+        }
+    });
+}
+
 function updateSimulation(options = {}) {
     const { renderSidebarAfter = true } = options;
     const fluid = globalModel['FLUID'];
@@ -130,6 +318,9 @@ function updateSimulation(options = {}) {
 
     if (typeof syncAllSourceTemperaturesFromFluidBasis === 'function') {
         syncAllSourceTemperaturesFromFluidBasis();
+    }
+    if (typeof normalizeAllSinkProps === 'function') {
+        normalizeAllSinkProps();
     }
 
     const density = fluid.props.density; 
@@ -156,8 +347,6 @@ function updateSimulation(options = {}) {
 
         const performanceModel = createPumpPerformanceModel(pump);
         const getPumpHead = performanceModel.getHead;
-        const getPumpEfficiency = performanceModel.getEfficiency;
-        const getPumpNPSHr = performanceModel.getNpshr;
         
         const calcSysHead = (q) => {
             const systemHead = calculatePumpSystemHead(hydraulicContext, q);
@@ -165,7 +354,56 @@ function updateSimulation(options = {}) {
         };
         
         const STEP = 5;
-        const MAX_FLOW = Math.ceil(Math.max(STEP, performanceModel.maxFlow) / STEP) * STEP;
+        const flowDemand = isSinkFlowDemandBoundary(hydraulicContext.dischargeBoundary)
+            ? Math.max(0, parseFloat(hydraulicContext.dischargeBoundary.props.demandFlow) || 0)
+            : null;
+        const MAX_FLOW = Math.ceil(Math.max(STEP, performanceModel.maxFlow, flowDemand || 0) / STEP) * STEP;
+
+        if (flowDemand !== null) {
+            const demandHead = getPumpHead(flowDemand);
+            for (let q = 0; q <= MAX_FLOW; q += STEP) {
+                pump.results.pumpCurve.push([q, getPumpHead(q)]);
+                pump.results.sysCurve.push([q, Math.abs(q - flowDemand) <= STEP / 2 ? demandHead : null]);
+            }
+
+            if (!hydraulicContext.isComplete) {
+                resetPumpCalculatedResults(pump, 'Incomplete network', ['Hydraulic network is incomplete from suction boundary to discharge flow-demand boundary.']);
+                refreshPumpUiReadouts(pumpId, pump);
+                return;
+            }
+
+            if (flowDemand <= 0) {
+                resetPumpCalculatedResults(pump, 'Invalid flow demand', ['Flow Demand must be greater than zero.']);
+                refreshPumpUiReadouts(pumpId, pump);
+                return;
+            }
+
+            if (flowDemand < performanceModel.minFlow || flowDemand > performanceModel.maxFlow) {
+                resetPumpCalculatedResults(pump, 'Outside curve', ['Flow Demand is outside the pump curve range; required pressure is not reliable.']);
+                refreshPumpUiReadouts(pumpId, pump);
+                return;
+            }
+
+            const hydraulicSnapshot = calculatePumpFlowDemandSnapshot(hydraulicContext, flowDemand, demandHead);
+            if (!hydraulicSnapshot) {
+                resetPumpCalculatedResults(pump, 'Incomplete calculation', ['Unable to calculate flow-demand hydraulic snapshot.']);
+                refreshPumpUiReadouts(pumpId, pump);
+                return;
+            }
+
+            const demandWarnings = [];
+            const selectedPressure = hydraulicContext.dischargeBoundary.props.pressureBasis === 'Stagnation'
+                ? hydraulicSnapshot.sinkStagnationPressureBar
+                : hydraulicSnapshot.sinkStaticPressureBar;
+            if (selectedPressure <= 0) {
+                demandWarnings.push('Calculated outlet pressure is at or below 0 bar a for this flow demand.');
+            }
+
+            applyPumpOperatingPointResults(pump, hydraulicContext, hydraulicSnapshot, flowDemand, demandHead, density, performanceModel, demandWarnings);
+            refreshPumpUiReadouts(pumpId, pump);
+            return;
+        }
+
         let opFlow = null, opHead = null;
         let previousPoint = null;
         let firstDiff = null;
@@ -198,50 +436,12 @@ function updateSimulation(options = {}) {
         }
 
         if (opFlow !== null && hydraulicContext.isComplete) {
-            const eff = getPumpEfficiency(opFlow);
-            const hydraulicPower = (opFlow * opHead * density * GRAVITY) / 3.6e6;
-            const power = eff > 0 ? hydraulicPower / (eff / 100) : null;
             const hydraulicSnapshot = calculatePumpHydraulicSnapshot(hydraulicContext, opFlow, opHead);
             if (!hydraulicSnapshot) {
                 resetPumpCalculatedResults(pump, 'Incomplete calculation', ['Unable to calculate hydraulic snapshot at operating point.']);
                 return;
             }
-            const npshr = getPumpNPSHr(opFlow);
-            const npshEvaluation = evaluateNpshMargin(hydraulicSnapshot.npsha, npshr, pump.props);
-            const operatingRegion = classifyPumpOperatingRegion(opFlow, pump.props);
-            const warnings = [];
-
-            if (operatingRegion.status === 'AOR') {
-                warnings.push('Operating point is outside POR; review reliability/efficiency.');
-            } else if (operatingRegion.status === 'Outside AOR') {
-                warnings.push('Operating point is outside configured AOR.');
-            }
-
-            if (npshEvaluation.status !== 'OK') {
-                warnings.push(npshEvaluation.message);
-            }
-
-            if (eff <= 0) {
-                warnings.push('Pump efficiency is zero or invalid at operating point.');
-            }
-
-            applyHydraulicPathResults(hydraulicContext, hydraulicSnapshot, opFlow);
-            pump.results.flow = opFlow.toFixed(2);
-            pump.results.head = opHead.toFixed(2);
-            pump.results.power = power === null ? null : power.toFixed(2);
-            pump.results.npsha = hydraulicSnapshot.npsha.toFixed(2);
-            pump.results.npshr = npshr.toFixed(2);
-            pump.results.npshMargin = npshEvaluation.margin === null ? null : npshEvaluation.margin.toFixed(2);
-            pump.results.npshRatio = npshEvaluation.ratio === null ? null : npshEvaluation.ratio.toFixed(2);
-            pump.results.bepPercent = operatingRegion.percent.toFixed(1);
-            pump.results.operatingRegion = operatingRegion.status;
-            pump.results.status = warnings.length ? 'Warning' : 'OK';
-            pump.results.warnings = warnings;
-            pump.results.efficiency = eff.toFixed(2);
-            pump.results.suctionPressure = hydraulicSnapshot.suctionPressureBar.toFixed(3);
-            pump.results.dischargePressure = hydraulicSnapshot.dischargePressureBar.toFixed(3);
-            pump.results.suctionLoss = hydraulicSnapshot.suctionLoss.toFixed(2);
-            pump.results.dischargeLoss = hydraulicSnapshot.dischargeLoss.toFixed(2);
+            applyPumpOperatingPointResults(pump, hydraulicContext, hydraulicSnapshot, opFlow, opHead, density, performanceModel);
         } else {
             const warnings = [];
             if (!hydraulicContext.isComplete) {
@@ -259,16 +459,11 @@ function updateSimulation(options = {}) {
             }
         }
         
-        if (currentSelectedNode === pumpId || activeChartPumpId === pumpId) {
-            updatePumpChart(pumpId);
-        }
-
-        if (currentSelectedNode === pumpId) {
-            updatePumpResultReadouts(pump);
-        }
+        refreshPumpUiReadouts(pumpId, pump);
     });
 
     updateAllInstrumentReadouts();
+    updateAllSinkReadouts();
 
     if (renderSidebarAfter && currentSelectedNode && !isSidebarEditActive()) {
         renderSidebar(currentSelectedNode);

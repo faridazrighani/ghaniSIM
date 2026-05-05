@@ -17,11 +17,7 @@
             label: 'Piping',
             items: [
                 { type: 'valve', label: 'Valve', icon: 'toolbar/icons/valve.svg' },
-                { type: 'checkValve', label: 'Check', icon: 'toolbar/icons/check-valve.svg' },
-                { type: 'pipe', label: 'Pipe', icon: 'toolbar/icons/pipe.svg', action: 'connect', routeStyle: 'Straight' },
-                { type: 'pipeElbow', label: 'Elbow', icon: 'toolbar/icons/elbow.svg', action: 'connect', routeStyle: 'Elbow' },
-                { type: 'flowline', label: 'Flowline', icon: 'toolbar/icons/flowline.svg', action: 'connect', routeStyle: 'Straight' },
-                { type: 'riser', label: 'Riser', icon: 'toolbar/icons/riser.svg', action: 'connect', routeStyle: 'Elbow' }
+                { type: 'checkValve', label: 'Check', icon: 'toolbar/icons/check-valve.svg' }
             ]
         },
         {
@@ -29,17 +25,13 @@
             label: 'PIPESIM',
             items: [
                 { type: 'source', label: 'Source', icon: 'toolbar/icons/source.svg' },
-                { type: 'sink', label: 'Sink', icon: 'toolbar/icons/sink.svg' },
-                { type: 'junction', label: 'Junction', icon: 'toolbar/icons/junction.svg' }
+                { type: 'sink', label: 'Sink', icon: 'toolbar/icons/sink.svg' }
             ]
         },
         {
             id: 'instruments',
             label: 'Instruments',
             items: [
-                { type: 'pressureIndicator', label: 'PI', icon: 'toolbar/icons/pressure-indicator.svg' },
-                { type: 'flowIndicator', label: 'FI', icon: 'toolbar/icons/flow-indicator.svg' },
-                { type: 'temperatureIndicator', label: 'TI', icon: 'toolbar/icons/temperature-indicator.svg' },
                 { type: 'lineMonitor', label: 'PTF', icon: 'toolbar/icons/line-monitor.svg' },
                 { type: 'levelController', label: 'LIC', icon: 'toolbar/icons/level-controller.svg' }
             ]

@@ -18,7 +18,27 @@ const SOURCE_SCHEMA = {
 };
 
 const SINK_SCHEMA = {
-    pressure: { label: 'Outlet Pressure', unit: 'bar a', type: 'number', default: 1.013 }
+    active: {
+        label: 'Active',
+        type: 'select',
+        default: 'Active',
+        options: ['Active', 'Inactive']
+    },
+    boundaryMode: {
+        label: 'Boundary Mode',
+        type: 'select',
+        default: 'Outlet Pressure',
+        options: ['Outlet Pressure', 'Flow Demand']
+    },
+    pressure: { label: 'Outlet Pressure', unit: 'bar a', type: 'number', default: 1.013 },
+    pressureBasis: {
+        label: 'Pressure Basis',
+        type: 'select',
+        default: 'Static',
+        options: ['Static', 'Stagnation']
+    },
+    elevation: { label: 'Elevation', unit: 'm', type: 'number', default: 0 },
+    demandFlow: { label: 'Flow Demand', unit: 'm3/h', type: 'number', default: 0 }
 };
 
 const JUNCTION_SCHEMA = {
