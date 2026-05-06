@@ -5,7 +5,8 @@ const HYDRAULIC_PASS_THROUGH_TYPES = [
     'mixer',
     'heatExchanger',
     'separator',
-    'verticalVessel'
+    'verticalVessel',
+    'tank'
 ];
 
 function toHydraulicNumber(value, fallback = 0) {
@@ -66,10 +67,68 @@ function isHydraulicPassThroughNode(node) {
 
 function isHydraulicBoundaryNode(node, direction) {
     if (!node) return false;
-    if (node.type === 'tank') return true;
     if (direction === 'upstream') return node.type === 'source';
     if (direction === 'downstream') return node.type === 'sink' && node.props?.active !== 'Inactive';
     return node.type === 'source' || node.type === 'sink';
+}
+
+function getHydraulicPortRole(portSelector = '') {
+    if (String(portSelector).includes('.outlet')) return 'outlet';
+    if (String(portSelector).includes('.inlet')) return 'inlet';
+    return '';
+}
+
+function orientHydraulicConnection(conn, model = globalModel) {
+    if (!conn) return null;
+    const fromRole = getHydraulicPortRole(conn.fromPort);
+    const toRole = getHydraulicPortRole(conn.toPort);
+
+    if (fromRole === 'inlet' && toRole === 'outlet') {
+        return {
+            ...conn,
+            from: conn.to,
+            fromPort: conn.toPort,
+            to: conn.from,
+            toPort: conn.fromPort,
+            rawFrom: conn.from,
+            rawFromPort: conn.fromPort,
+            rawTo: conn.to,
+            rawToPort: conn.toPort,
+            hydraulicReversed: true
+        };
+    }
+
+    const fromNode = model ? model[conn.from] : null;
+    const toNode = model ? model[conn.to] : null;
+    if (fromNode?.type === 'sink' || toNode?.type === 'source') {
+        return {
+            ...conn,
+            from: conn.to,
+            fromPort: conn.toPort,
+            to: conn.from,
+            toPort: conn.fromPort,
+            rawFrom: conn.from,
+            rawFromPort: conn.fromPort,
+            rawTo: conn.to,
+            rawToPort: conn.toPort,
+            hydraulicReversed: true
+        };
+    }
+
+    return {
+        ...conn,
+        rawFrom: conn.from,
+        rawFromPort: conn.fromPort,
+        rawTo: conn.to,
+        rawToPort: conn.toPort,
+        hydraulicReversed: false
+    };
+}
+
+function getAttachedSourceBoundaryId(nodeId, model) {
+    if (typeof sourceLinks === 'undefined' || !Array.isArray(sourceLinks)) return null;
+    const link = sourceLinks.find(item => item.targetId === nodeId && model[item.sourceId]?.type === 'source');
+    return link ? link.sourceId : null;
 }
 
 function getNodeHydraulicElevation(node) {
@@ -101,9 +160,20 @@ function traceHydraulicPath(startNodeId, direction, model, connectionList) {
     const visitedPipes = new Set();
     let currentId = startNodeId;
     let boundaryId = null;
+    const hydraulicConnections = (connectionList || [])
+        .map(conn => orientHydraulicConnection(conn, model))
+        .filter(Boolean);
 
     for (let stepCount = 0; stepCount < 80; stepCount++) {
-        const candidates = (connectionList || []).filter(conn => (
+        if (reverseSearch) {
+            const attachedSourceId = getAttachedSourceBoundaryId(currentId, model);
+            if (attachedSourceId) {
+                boundaryId = attachedSourceId;
+                break;
+            }
+        }
+
+        const candidates = hydraulicConnections.filter(conn => (
             reverseSearch ? conn.to === currentId : conn.from === currentId
         ));
         const conn = candidates.find(item => !visitedPipes.has(item.pipeId));
@@ -119,6 +189,14 @@ function traceHydraulicPath(startNodeId, direction, model, connectionList) {
         const nextId = reverseSearch ? conn.from : conn.to;
         const nextNode = model[nextId];
         if (!nextNode) break;
+
+        if (reverseSearch) {
+            const attachedSourceId = getAttachedSourceBoundaryId(nextId, model);
+            if (attachedSourceId) {
+                boundaryId = attachedSourceId;
+                break;
+            }
+        }
 
         if (isHydraulicBoundaryNode(nextNode, direction)) {
             boundaryId = nextId;

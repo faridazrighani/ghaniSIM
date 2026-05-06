@@ -1,3 +1,6 @@
+const TANK_PSV_MODE_MANUAL = 'Manual';
+const TANK_PSV_MODE_SUGGESTED = 'Suggested';
+
 const TANK_SCHEMA = {
     visualScale: { label: 'PFD Size', unit: '%', type: 'number', default: 100 },
     elevation: { label: 'Base Elevation', unit: 'm', type: 'number', default: 5 },
@@ -8,7 +11,14 @@ const TANK_SCHEMA = {
     nll: { label: 'Normal Liq. Level (NLL)', unit: 'm', type: 'number', default: 2.5 },
     lll: { label: 'Low Liquid Level (LLL)', unit: 'm', type: 'number', default: 0.5 },
     tLevelElev: { label: 'Transmitter Elev.', unit: 'm', type: 'number', default: 0.2 },
-    pressure: { label: 'Operating Pressure', unit: 'bar a', type: 'number', default: 1.013 },
-    psvSet: { label: 'PSV Set Pressure', unit: 'bar a', type: 'number', default: 1.5 },
+    pressure: { label: 'Operating Pressure', unit: 'bar a', type: 'number', default: 0 },
+    designPressure: { label: 'Design Pressure / MAWP', unit: 'bar a', type: 'number', default: 0 },
+    psvMode: {
+        label: 'PSV Mode',
+        type: 'select',
+        default: TANK_PSV_MODE_MANUAL,
+        options: [TANK_PSV_MODE_MANUAL, TANK_PSV_MODE_SUGGESTED]
+    },
+    psvSet: { label: 'PSV Set Pressure', unit: 'bar a', type: 'number', default: 0 },
     vaporPressure: { label: 'Vapor Pressure', unit: 'bar a', type: 'number', default: 0, readonly: true }
 };

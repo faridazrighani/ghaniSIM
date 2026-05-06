@@ -150,3 +150,175 @@ function evaluateNpshMargin(npsha, npshr, props = {}) {
         message: ok ? 'NPSH margin OK' : 'NPSH margin below configured minimum'
     };
 }
+
+function getPumpOptimizationSourceFlow(context) {
+    const sourceFlow = toPumpNumber(context?.suctionBoundary?.props?.flow, NaN);
+    return Number.isFinite(sourceFlow) && sourceFlow > 0 ? sourceFlow : null;
+}
+
+function getPumpOptimizationTargetFlow(pump, context) {
+    if (isSinkFlowDemandBoundary(context?.dischargeBoundary)) {
+        const demandFlow = toPumpNumber(context.dischargeBoundary.props.demandFlow, NaN);
+        if (Number.isFinite(demandFlow) && demandFlow > 0) return demandFlow;
+    }
+
+    const sourceFlow = getPumpOptimizationSourceFlow(context);
+    if (sourceFlow !== null) return sourceFlow;
+
+    const currentFlow = toPumpNumber(pump?.results?.flow, NaN);
+    if (Number.isFinite(currentFlow) && currentFlow > 0) return currentFlow;
+
+    return Math.max(toPumpNumber(pump?.props?.designFlow, 100), 0.001);
+}
+
+function calculatePressureBoundaryHeadForOptimization(node, density, flowRateM3H, path, model) {
+    if (!node || !node.props) return null;
+    const pressure = toPumpNumber(node.props.pressure, 1.013);
+    const pressureHead = pressureBarToHead(pressure > 0 ? pressure : 1.013, density);
+    let boundaryHead = pressureHead + getNodeHydraulicElevation(node);
+
+    if (node.type === 'sink' && node.props.pressureBasis === 'Static') {
+        boundaryHead += getBoundaryPipeVelocityHead(node, flowRateM3H, path, model);
+    }
+
+    return boundaryHead;
+}
+
+function calculatePumpRequiredHeadAtFlow(context, flowRateM3H, model = globalModel) {
+    if (!context || !context.isComplete) return null;
+
+    const suctionBoundaryHead = getBoundaryHydraulicHead(
+        context.suctionBoundary,
+        context.density,
+        flowRateM3H,
+        context.suctionPath,
+        model
+    );
+    const dischargeBoundaryHead = isSinkFlowDemandBoundary(context.dischargeBoundary)
+        ? calculatePressureBoundaryHeadForOptimization(context.dischargeBoundary, context.density, flowRateM3H, context.dischargePath, model)
+        : getBoundaryHydraulicHead(context.dischargeBoundary, context.density, flowRateM3H, context.dischargePath, model);
+    const suctionLoss = calculateHydraulicPathLossHead(
+        context.suctionPath,
+        flowRateM3H,
+        model,
+        context.density,
+        context.pumpId
+    );
+    const dischargeLoss = calculateHydraulicPathLossHead(
+        context.dischargePath,
+        flowRateM3H,
+        model,
+        context.density,
+        context.dischargePath.boundaryId
+    );
+
+    if ([suctionBoundaryHead, dischargeBoundaryHead, suctionLoss, dischargeLoss].some(value => value === null)) {
+        return null;
+    }
+
+    const requiredHead = Math.max(0.001, (dischargeBoundaryHead - suctionBoundaryHead) + suctionLoss + dischargeLoss);
+    return {
+        requiredHead,
+        suctionBoundaryHead,
+        dischargeBoundaryHead,
+        suctionLoss,
+        dischargeLoss
+    };
+}
+
+function getPumpOptimizationAllowedNpshr(npsha, props) {
+    const available = toPumpNumber(npsha, NaN);
+    if (!Number.isFinite(available)) return null;
+    const ratioLimit = available / Math.max(toPumpNumber(props.minNpshMarginRatio, 1.1), 1);
+    const marginLimit = available - Math.max(toPumpNumber(props.minNpshMargin, 0.5), 0);
+    return Math.min(ratioLimit, marginLimit);
+}
+
+function optimizePumpBasicParameters(pumpId, model = globalModel, connectionList = connections) {
+    const pump = model[pumpId];
+    const fluid = model.FLUID;
+    if (!pump || pump.type !== 'pump' || !fluid?.props) {
+        return { ok: false, status: 'Invalid pump', warnings: ['Select a pump before running optimization.'] };
+    }
+
+    normalizePumpProps(pump.props);
+    const density = Math.max(toPumpNumber(fluid.props.density, 1000), 1);
+    const vaporPressurePa = toPumpNumber(fluid.props.vaporPressure, 0) * 100000;
+    const context = createPumpHydraulicContext(pumpId, model, connectionList, density, vaporPressurePa);
+    const warnings = [];
+
+    if (!context.isComplete) {
+        return {
+            ok: false,
+            status: 'Incomplete network',
+            warnings: typeof getIncompleteHydraulicNetworkWarnings === 'function'
+                ? getIncompleteHydraulicNetworkWarnings(context)
+                : ['Connect upstream SRC and downstream SNK before optimization.']
+        };
+    }
+
+    const targetFlow = getPumpOptimizationTargetFlow(pump, context);
+    const sizing = calculatePumpRequiredHeadAtFlow(context, targetFlow, model);
+    if (!sizing || !Number.isFinite(sizing.requiredHead) || sizing.requiredHead <= 0) {
+        return {
+            ok: false,
+            status: 'No valid system head',
+            warnings: ['Unable to calculate required head at target flow. Check pipe size, fittings, and boundary pressure.']
+        };
+    }
+
+    const snapshot = isSinkFlowDemandBoundary(context.dischargeBoundary)
+        ? calculatePumpFlowDemandSnapshot(context, targetFlow, sizing.requiredHead)
+        : calculatePumpHydraulicSnapshot(context, targetFlow, sizing.requiredHead);
+    if (!snapshot) {
+        return {
+            ok: false,
+            status: 'Incomplete snapshot',
+            warnings: ['Unable to calculate NPSH at optimized operating point.']
+        };
+    }
+
+    const allowedNpshr = getPumpOptimizationAllowedNpshr(snapshot.npsha, pump.props);
+    let optimizedNpshr = Math.min(
+        toPumpNumber(pump.props.designNpshr, 3),
+        Number.isFinite(allowedNpshr) ? allowedNpshr * 0.9 : 3
+    );
+    if (!Number.isFinite(optimizedNpshr) || optimizedNpshr <= 0) {
+        optimizedNpshr = 0.1;
+        warnings.push('NPSHa is very low; choose a low-NPSHr pump and review suction pressure/losses.');
+    } else if (allowedNpshr !== null && allowedNpshr < toPumpNumber(pump.props.designNpshr, 3)) {
+        warnings.push('NPSHr reduced to stay below available NPSH margin.');
+    }
+
+    if (isSinkFlowDemandBoundary(context.dischargeBoundary)) {
+        warnings.push('Flow Demand mode sizes head against the sink pressure field or atmospheric fallback.');
+    } else {
+        const sourceFlow = getPumpOptimizationSourceFlow(context);
+        if (sourceFlow !== null) {
+            warnings.push('Target flow taken from upstream SRC flow input.');
+        }
+    }
+
+    pump.props.inputMode = 'Basic';
+    pump.props.designFlow = Number(targetFlow.toFixed(3));
+    pump.props.bepFlow = Number(targetFlow.toFixed(3));
+    pump.props.designHead = Number(sizing.requiredHead.toFixed(3));
+    pump.props.designEfficiency = Math.max(toPumpNumber(pump.props.designEfficiency, 80), 80);
+    pump.props.designNpshr = Number(Math.max(0.01, optimizedNpshr).toFixed(3));
+    pump.props.porMinPercent = 70;
+    pump.props.porMaxPercent = 120;
+    pump.props.aorMinPercent = 50;
+    pump.props.aorMaxPercent = 130;
+    normalizePumpProps(pump.props);
+
+    return {
+        ok: true,
+        status: warnings.length ? 'Optimized with notes' : 'Optimized',
+        targetFlow: pump.props.designFlow,
+        requiredHead: pump.props.designHead,
+        npsha: Number(snapshot.npsha.toFixed(3)),
+        maxAllowedNpshr: allowedNpshr === null ? null : Number(allowedNpshr.toFixed(3)),
+        selectedNpshr: pump.props.designNpshr,
+        warnings
+    };
+}

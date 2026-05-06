@@ -61,6 +61,17 @@ function escapeHtml(value) {
     }[char]));
 }
 
+function captureSidebarEdit(target) {
+    if (typeof captureState !== 'function' || !target) return;
+    if (target.dataset.historyCaptured === 'true') return;
+    captureState();
+    target.dataset.historyCaptured = 'true';
+}
+
+function releaseSidebarEditCapture(target) {
+    if (target?.dataset) delete target.dataset.historyCaptured;
+}
+
 function clearSelection() {
     document.querySelectorAll('.pfd-object').forEach(el => el.classList.remove('selected'));
     currentSelectedNode = null;
@@ -123,12 +134,14 @@ function renderSidebar(nodeId) {
             }
             inp.dataset.key = key;
             inp.dataset.node = nodeId;
+            inp.addEventListener('blur', () => releaseSidebarEditCapture(inp));
             
             // On input change, update model and resimulate
             inp.addEventListener(inputType === 'select' ? 'change' : 'input', (e) => {
                 const k = e.target.dataset.key;
                 const n = e.target.dataset.node;
                 const v = e.target.type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value;
+                captureSidebarEdit(e.target);
                 globalModel[n].props[k] = v;
 
                 if (isVisualResizableType(globalModel[n].type) && k === 'visualScale') {
@@ -182,6 +195,20 @@ function renderSidebar(nodeId) {
                         globalModel[n].props.volume = calculateTankLiquidVolume(D, L);
                         const rVol = document.querySelector(`td.prop-value[data-key="volume"]`);
                         if (rVol) rVol.textContent = globalModel[n].props.volume.toFixed(3) + ' m3';
+                    }
+
+                    if (['pressure', 'designPressure', 'psvMode', 'psvSet'].includes(k)) {
+                        if (typeof normalizeTankProps === 'function') normalizeTankProps(globalModel[n]);
+                        if (typeof updateTankPressureReadout === 'function') updateTankPressureReadout(n);
+
+                        if (k === 'psvMode') {
+                            renderSidebar(n);
+                            updateSimulation({ renderSidebarAfter: false });
+                            return;
+                        }
+
+                        updateSimulation({ renderSidebarAfter: false });
+                        return;
                     }
                 }
                 
@@ -269,6 +296,7 @@ function renderSidebar(nodeId) {
         tbody.appendChild(modeTr);
         
         document.getElementById('fluidInputMode').addEventListener('change', (e) => {
+            captureSidebarEdit(e.target);
             node.props.inputMode = e.target.value;
             renderSidebar(nodeId);
         });
@@ -289,6 +317,7 @@ function renderSidebar(nodeId) {
         tbody.appendChild(fluidTr);
         
         document.getElementById('fluidNameSelect').addEventListener('change', (e) => {
+            captureSidebarEdit(e.target);
             node.props.fluidName = e.target.value;
             if (e.target.value === 'Water') {
                 updateWaterProperties();
@@ -317,6 +346,7 @@ function renderSidebar(nodeId) {
         
         document.getElementById('fluidTempInput').addEventListener('input', (e) => {
             const val = parseFloat(e.target.value) || 0;
+            captureSidebarEdit(e.target);
             node.props.temp = val;
             if (node.props.fluidName === 'Water' || node.props.fluidName === 'Methanol' || node.props.fluidName === 'Palm Oil' || node.props.fluidName === 'Crude Oil') {
                 if (node.props.fluidName === 'Water') updateWaterProperties();
@@ -390,12 +420,50 @@ function renderSidebar(nodeId) {
         tbody.appendChild(modeTr);
         
         document.getElementById('pumpInputMode').addEventListener('change', (e) => {
+            captureSidebarEdit(e.target);
             node.props.inputMode = e.target.value;
             renderSidebar(nodeId);
             updateSimulation();
         });
         
         addRow('Elevation', node.props.elevation, 'elevation', false, 'm', 'number');
+
+        const optTr = document.createElement('tr');
+        optTr.innerHTML = `
+            <td colspan="2" style="padding: 8px 12px;">
+                <button class="btn-add-segment" data-node="${nodeId}" id="btnOptimizePump">Auto Optimize Basic Pump</button>
+            </td>
+        `;
+        tbody.appendChild(optTr);
+        optTr.querySelector('#btnOptimizePump').addEventListener('click', () => {
+            if (typeof optimizePumpBasicParameters !== 'function') return;
+            captureState();
+            const result = optimizePumpBasicParameters(nodeId);
+            if (globalModel[nodeId]) {
+                ensureNodeResults(globalModel[nodeId]);
+                globalModel[nodeId].results.optimization = result;
+            }
+            updateSimulation({ renderSidebarAfter: false });
+            if (globalModel[nodeId]?.results) {
+                globalModel[nodeId].results.optimization = result;
+            }
+            renderSidebar(nodeId);
+        });
+
+        if (node.results?.optimization) {
+            const opt = node.results.optimization;
+            const notes = (opt.warnings || []).join(' | ') || 'OK';
+            const optHeader = document.createElement('tr');
+            optHeader.innerHTML = '<td colspan="2" style="background:#eee; font-weight:bold; padding:4px 8px; text-align:center;">Auto Optimization Result</td>';
+            tbody.appendChild(optHeader);
+            addRow('Optimization Status', opt.status || '-', 'pump-opt-status', true);
+            addRow('Target Flow', opt.targetFlow ?? null, 'pump-opt-target-flow', true, 'm3/h');
+            addRow('Required Head', opt.requiredHead ?? null, 'pump-opt-required-head', true, 'm');
+            addRow('NPSHa @ Target', opt.npsha ?? null, 'pump-opt-npsha', true, 'm');
+            addRow('Max Allowed NPSHr', opt.maxAllowedNpshr ?? null, 'pump-opt-max-npshr', true, 'm');
+            addRow('Selected NPSHr', opt.selectedNpshr ?? null, 'pump-opt-selected-npshr', true, 'm');
+            addRow('Notes', notes, 'pump-opt-notes', true);
+        }
 
         if (node.props.inputMode === 'Basic') {
             addRow('Design Flow', node.props.designFlow, 'designFlow', false, 'm3/h', 'number');
@@ -452,15 +520,18 @@ function renderSidebar(nodeId) {
             tbody.appendChild(tr);
             
             td.querySelectorAll('.segment-input').forEach(inp => {
+                inp.addEventListener('blur', () => releaseSidebarEditCapture(inp));
                 inp.addEventListener('input', (e) => {
                     const idx = parseInt(e.target.dataset.idx);
                     const field = e.target.dataset.field;
+                    captureSidebarEdit(e.target);
                     node.props.curveData[idx][field] = parseFloat(e.target.value) || 0;
                     updateSimulation({ renderSidebarAfter: false });
                 });
             });
             
             td.querySelector('.btn-add-segment').addEventListener('click', () => {
+                captureState();
                 const last = node.props.curveData[node.props.curveData.length - 1];
                 node.props.curveData.push({
                     flow: last ? last.flow + 50 : 50,
@@ -475,6 +546,7 @@ function renderSidebar(nodeId) {
             td.querySelectorAll('.btn-remove-segment').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     const idx = parseInt(e.target.dataset.idx);
+                    captureState();
                     node.props.curveData.splice(idx, 1);
                     renderSidebar(nodeId);
                     updateSimulation();
@@ -657,12 +729,14 @@ function renderSidebar(nodeId) {
         };
         
         segTd.querySelectorAll('.segment-input').forEach(inp => {
+            inp.addEventListener('blur', () => releaseSidebarEditCapture(inp));
             inp.addEventListener('input', (e) => {
                 if (e.target.tagName === 'SELECT') return;
                 const idx = parseInt(e.target.dataset.idx);
                 const field = e.target.dataset.field;
                 const segment = node.props.segments[idx];
                 if (!segment) return;
+                captureSidebarEdit(e.target);
 
                 if (field === 'pipeSize') {
                     segment.pipeSize = e.target.value;
@@ -704,6 +778,7 @@ function renderSidebar(nodeId) {
                 const idx = parseInt(e.target.dataset.idx);
                 const field = e.target.dataset.field;
                 const segment = node.props.segments[idx];
+                if (segment) captureSidebarEdit(e.target);
                 if (segment && field === 'pipeSize') {
                     segment.pipeSize = e.target.value;
                     const sizeOption = getPipeSizeOption(segment.pipeSize);
@@ -727,6 +802,7 @@ function renderSidebar(nodeId) {
         });
         
         segTd.querySelector('.btn-add-segment').addEventListener('click', () => {
+            captureState();
             node.props.segments.push({
                 name: "New Seg",
                 pipeSize: "Custom diameter",
@@ -743,6 +819,7 @@ function renderSidebar(nodeId) {
         segTd.querySelectorAll('.btn-remove-segment').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const idx = parseInt(e.target.dataset.idx);
+                captureState();
                 node.props.segments.splice(idx, 1);
                 renderSidebar(nodeId);
                 updateSimulation();

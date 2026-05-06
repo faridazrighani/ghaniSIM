@@ -144,10 +144,95 @@ function renderSinkReadoutCards(node, tbody) {
     tbody.appendChild(tr);
 }
 
+function renderTankReadoutCards(node, tbody) {
+    const results = node.results || {};
+    const warnings = results.warnings || [];
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+        <td colspan="2" style="padding: 10px 12px;">
+            <div class="boundary-result-grid">
+                <div class="boundary-result-card">
+                    <span>Connected Pipes</span>
+                    <strong class="prop-value" data-key="tank-connected-pipes">${escapeHtml((results.connectedPipes || []).join(', ') || '-')}</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Calculated Pressure</span>
+                    <strong class="prop-value" data-key="tank-calculated-pressure">${formatReadoutValue(results.calculatedPressure)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Inlet Pressure</span>
+                    <strong class="prop-value" data-key="tank-inlet-pressure">${formatReadoutValue(results.inletPressure)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Outlet Pressure</span>
+                    <strong class="prop-value" data-key="tank-outlet-pressure">${formatReadoutValue(results.outletPressure)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Stagnation P</span>
+                    <strong class="prop-value" data-key="tank-stagnation-pressure">${formatReadoutValue(results.stagnationPressure)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Fluid Vapor P</span>
+                    <strong class="prop-value" data-key="tank-vapor-pressure">${formatReadoutValue(results.vaporPressure ?? node.props?.vaporPressure)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Suggested PSV</span>
+                    <strong class="prop-value" data-key="tank-suggested-psv">${formatReadoutValue(results.suggestedPsv)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>PSV Basis</span>
+                    <strong class="prop-value" data-key="tank-psv-basis">${escapeHtml(results.psvBasis || '-')}</strong>
+                </div>
+                <div class="boundary-result-card boundary-result-card-wide">
+                    <span>Status</span>
+                    <strong class="prop-value" data-key="tank-status">${escapeHtml(results.status || '-')}</strong>
+                </div>
+                <div class="boundary-result-card boundary-result-card-wide">
+                    <span>Warnings</span>
+                    <strong class="prop-value" data-key="tank-warnings">${escapeHtml(warnings.join(' | ') || 'OK')}</strong>
+                </div>
+            </div>
+        </td>
+    `;
+    tbody.appendChild(tr);
+}
+
 function renderObjectProperties(type, nodeId, node, addRow, tbody) {
     const schema = EQUIPMENT_SCHEMAS[type];
     if (!schema) {
         addRow('Notes', 'No custom properties defined for this object type.', '', true);
+        return;
+    }
+
+    if (type === 'tank') {
+        if (typeof normalizeTankProps === 'function') normalizeTankProps(node);
+        if (typeof ensureNodeResults === 'function') ensureNodeResults(node);
+        if (typeof updateTankPressureReadout === 'function') updateTankPressureReadout(nodeId);
+
+        const suggestedMode = typeof TANK_PSV_MODE_SUGGESTED !== 'undefined' ? TANK_PSV_MODE_SUGGESTED : 'Suggested';
+        const manualMode = typeof TANK_PSV_MODE_MANUAL !== 'undefined' ? TANK_PSV_MODE_MANUAL : 'Manual';
+        const psvReadonly = node.props.psvMode === suggestedMode;
+
+        appendSectionHeader(tbody, 'Geometry');
+        addRow('PFD Size', node.props.visualScale, 'visualScale', false, '%', 'number');
+        addRow('Base Elevation', node.props.elevation, 'elevation', false, 'm', 'number');
+        addRow('Tank Diameter', node.props.diameter, 'diameter', false, 'm', 'number');
+        addRow('Total Volume', node.props.volume, 'volume', true, 'm3');
+        addRow('Current Level', node.props.liquidLevel, 'liquidLevel', false, 'm', 'number');
+        addRow('High Liquid Level (HLL)', node.props.hll, 'hll', false, 'm', 'number');
+        addRow('Normal Liq. Level (NLL)', node.props.nll, 'nll', false, 'm', 'number');
+        addRow('Low Liquid Level (LLL)', node.props.lll, 'lll', false, 'm', 'number');
+        addRow('Transmitter Elev.', node.props.tLevelElev, 'tLevelElev', false, 'm', 'number');
+
+        appendSectionHeader(tbody, 'Pressure & PSV');
+        addRow('Operating Pressure', node.props.pressure, 'pressure', false, 'bar a', 'number');
+        addRow('Design Pressure / MAWP', node.props.designPressure, 'designPressure', false, 'bar a', 'number');
+        addRow('PSV Mode', node.props.psvMode, 'psvMode', false, '', 'select', [manualMode, suggestedMode]);
+        addRow('PSV Set Pressure', node.props.psvSet, 'psvSet', psvReadonly, 'bar a', 'number');
+        addRow('Fluid Vapor Pressure', node.results?.vaporPressure ?? node.props.vaporPressure, 'tank-fluid-vapor-pressure', true, 'bar a');
+
+        appendSectionHeader(tbody, 'Connected Pressure Readout');
+        renderTankReadoutCards(node, tbody);
         return;
     }
 

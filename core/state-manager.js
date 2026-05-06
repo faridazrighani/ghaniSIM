@@ -55,6 +55,21 @@ let nextPipeRouteStyle = 'Straight';
 // --- State Modifiers ---
 
 function createDefaultResults(type) {
+    if (type === 'tank') {
+        return {
+            connectedPipes: [],
+            calculatedPressure: null,
+            inletPressure: null,
+            outletPressure: null,
+            stagnationPressure: null,
+            vaporPressure: null,
+            suggestedPsv: 0,
+            psvBasis: 'Not available',
+            status: '-',
+            warnings: []
+        };
+    }
+
     if (type === 'sink') {
         return {
             attachedPipe: '',
@@ -93,6 +108,7 @@ function createDefaultResults(type) {
         dischargePressure: 0,
         suctionLoss: 0,
         dischargeLoss: 0,
+        optimization: null,
         sysCurve: [],
         pumpCurve: []
     };
@@ -101,7 +117,7 @@ function createDefaultResults(type) {
 function ensureNodeResults(node) {
     if (!node.results) {
         node.results = createDefaultResults(node.type) || {};
-    } else if (node.type === 'pump' || node.type === 'sink') {
+    } else if (node.type === 'pump' || node.type === 'sink' || node.type === 'tank') {
         const defaults = createDefaultResults(node.type) || {};
         Object.keys(defaults).forEach(key => {
             if (node.results[key] === undefined) node.results[key] = defaults[key];

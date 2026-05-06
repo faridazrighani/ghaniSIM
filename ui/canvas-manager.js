@@ -178,13 +178,27 @@ function getDefaultDescription(type) {
     return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+function escapeObjectMarkup(value) {
+    if (typeof escapeHtml === 'function') return escapeHtml(value);
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[char]));
+}
+
 function getObjectMarkup(type, nodeId, desc) {
+    const safeNodeId = escapeObjectMarkup(nodeId);
+    const safeDesc = escapeObjectMarkup(desc);
+
     return `
         <div class="object-icon">
             <img class="pfd-icon-img" src="${getObjectIconPath(type)}" alt="">
             ${getObjectPortsHtml(type)}
         </div>
-        <div class="object-name">${nodeId}<br><span class="object-desc">${desc}</span></div>
+        <div class="object-name">${safeNodeId}<br><span class="object-desc">${safeDesc}</span></div>
         ${type === 'lineMonitor' ? getLineMonitorReadoutMarkup() : ''}
     `;
 }
@@ -429,15 +443,21 @@ function makeDraggable(obj) {
                             pipeProps.routeStyle = 'Elbow';
                         }
                         
+                        captureState();
                         globalModel[pipeId] = { type: "pipe", name: pipeId, desc: "Pipe Line", props: pipeProps };
                         
-                        connections.push({
+                        const newConnection = {
                             from: pendingConnectionStart.id,
                             fromPort: pendingConnectionStart.portSelector,
                             to: nodeId,
                             toPort: portClass,
                             pipeId: pipeId
-                        });
+                        };
+                        connections.push(
+                            typeof orientHydraulicConnection === 'function'
+                                ? orientHydraulicConnection(newConnection, globalModel)
+                                : newConnection
+                        );
                         
                         pendingConnectionStart = null;
                         selectNode(pipeId, null);
