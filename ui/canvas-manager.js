@@ -25,6 +25,7 @@ function applyObjectVisuals(nodeId) {
 
     el.classList.add(`object-type-${node.type}`);
     el.dataset.type = node.type;
+    updateObjectOperatingStatusVisual(nodeId);
 
     if (!isVisualResizableType(node.type)) return;
 
@@ -32,6 +33,34 @@ function applyObjectVisuals(nodeId) {
     const scale = getVisualScale(node.props);
     el.style.setProperty('--visual-width', `${base.width * scale}px`);
     el.style.setProperty('--visual-height', `${base.height * scale}px`);
+}
+
+function hasPumpOperatingWarning(node) {
+    if (!node || node.type !== 'pump') return false;
+    const status = String(node.results?.status || '').toLowerCase();
+    const warnings = Array.isArray(node.results?.warnings)
+        ? node.results.warnings.filter(Boolean)
+        : [];
+    return status === 'warning' || warnings.length > 0;
+}
+
+function updateObjectOperatingStatusVisual(nodeId) {
+    const node = globalModel[nodeId];
+    const el = getObjectElement(nodeId);
+    if (!node || !el) return;
+
+    const hasWarning = hasPumpOperatingWarning(node);
+    el.classList.toggle('pump-status-warning', hasWarning);
+    if (node.type === 'pump') {
+        el.dataset.operatingStatus = hasWarning ? 'warning' : 'normal';
+        el.title = hasWarning
+            ? `Pump warning: ${(node.results?.warnings || []).join(' | ') || node.results?.status || 'Review operating results'}`
+            : '';
+    }
+}
+
+function updateAllObjectOperatingStatusVisuals() {
+    Object.keys(globalModel).forEach(updateObjectOperatingStatusVisual);
 }
 
 function setAppMode(mode) {
@@ -153,7 +182,7 @@ function getLineMonitorReadoutMarkup() {
                     <tr>
                         <th scope="row">P</th>
                         <td data-readout-key="pressure">-</td>
-                        <td>bar</td>
+                        <td>bar a</td>
                     </tr>
                     <tr>
                         <th scope="row">T</th>

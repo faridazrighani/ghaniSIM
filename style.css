@@ -297,6 +297,20 @@ textarea {
     filter: drop-shadow(0 0 4px rgba(0, 120, 215, 0.6));
 }
 
+.object-type-pump.pump-status-warning .object-icon {
+    border-radius: 8px;
+    background: rgba(220, 38, 38, 0.1);
+    box-shadow: 0 0 0 2px #dc2626, 0 0 10px rgba(220, 38, 38, 0.42);
+}
+
+.object-type-pump.pump-status-warning .object-name {
+    color: #b91c1c;
+}
+
+.object-type-pump.pump-status-warning .pfd-icon-img {
+    filter: sepia(1) saturate(5) hue-rotate(315deg) brightness(0.92);
+}
+
 .object-icon {
     position: relative;
     display: flex;
@@ -520,7 +534,8 @@ textarea {
 }
 
 /* Right Sidebar (Properties Panel) */
-.properties-sidebar {
+.properties-sidebar,
+.pump-properties-sidebar {
     flex: 0 0 320px;
     width: 320px;
     min-width: 280px;
@@ -532,6 +547,17 @@ textarea {
     flex-direction: column;
     overflow: hidden;
     box-shadow: -2px 0 10px rgba(0,0,0,0.03);
+}
+
+.pump-properties-sidebar {
+    flex-basis: 300px;
+    width: 300px;
+    min-width: 260px;
+    max-width: 34vw;
+}
+
+.pump-properties-sidebar[hidden] {
+    display: none;
 }
 
 .sidebar-header {
@@ -598,6 +624,45 @@ textarea {
     font-weight: 700;
     text-align: center;
     padding: 6px 8px !important;
+}
+
+.advanced-section-cell {
+    padding: 8px 12px !important;
+    background: #fafafa;
+}
+
+.advanced-section {
+    border: 1px solid #d8e6f2;
+    border-radius: 4px;
+    background: #ffffff;
+}
+
+.advanced-section summary {
+    cursor: pointer;
+    padding: 7px 9px;
+    color: #123b5a;
+    font-weight: 700;
+    list-style-position: inside;
+}
+
+.advanced-section[open] summary {
+    border-bottom: 1px solid #d8e6f2;
+}
+
+.advanced-section-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.advanced-section-table td {
+    padding: 7px 9px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.advanced-section-table tr:last-child td {
+    border-bottom: 0;
 }
 
 .prop-label { color: #666; width: 40%; }
@@ -838,7 +903,8 @@ select.prop-input-field {
 }
 
 @media (max-width: 1180px) {
-    .properties-sidebar {
+    .properties-sidebar,
+    .pump-properties-sidebar {
         flex-basis: 300px;
         max-width: 42vw;
     }
@@ -858,27 +924,6 @@ select.prop-input-field {
         padding: 4px 8px;
     }
 
-    .main-workspace {
-        flex-direction: column;
-        flex: 1 1 auto;
-        min-height: 0;
-    }
-
-    .pfd-canvas {
-        flex: 1 1 auto;
-        min-height: 0;
-    }
-
-    .properties-sidebar {
-        flex: 0 0 min(340px, 42%);
-        width: 100%;
-        min-width: 0;
-        max-width: none;
-        border-left: 0;
-        border-top: 1px solid var(--border-color);
-        box-shadow: 0 -2px 10px rgba(0,0,0,0.04);
-    }
-
     .sidebar-header {
         padding: 9px 12px;
     }
@@ -893,6 +938,31 @@ select.prop-input-field {
         width: calc(100vw - 24px);
         height: min(520px, calc(100vh - 24px));
         height: min(520px, calc(100dvh - 24px));
+    }
+}
+
+@media (max-width: 720px) {
+    .main-workspace {
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    .pfd-canvas {
+        flex: 1 1 280px;
+        min-height: 220px;
+    }
+
+    .properties-sidebar,
+    .pump-properties-sidebar {
+        flex: 0 1 min(220px, 28dvh);
+        width: 100%;
+        min-width: 0;
+        min-height: 170px;
+        max-width: none;
+        border-left: 0;
+        border-top: 1px solid var(--border-color);
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.04);
     }
 }
 
@@ -931,12 +1001,15 @@ select.prop-input-field {
     }
 
     .pfd-canvas {
-        min-height: 0;
+        flex-basis: 260px;
+        min-height: 200px;
         background-size: 16px 16px;
     }
 
-    .properties-sidebar {
-        flex-basis: min(300px, 38%);
+    .properties-sidebar,
+    .pump-properties-sidebar {
+        flex-basis: min(210px, 27dvh);
+        min-height: 160px;
     }
 
     .prop-table {
@@ -1004,7 +1077,8 @@ select.prop-input-field {
         flex-direction: row;
     }
 
-    .properties-sidebar {
+    .properties-sidebar,
+    .pump-properties-sidebar {
         flex: 0 0 min(300px, 38vw);
         width: min(300px, 38vw);
         max-width: 38vw;

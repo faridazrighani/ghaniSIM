@@ -8,6 +8,12 @@ function clampPumpNumber(value, fallback, min, max) {
 }
 
 function normalizePumpProps(props = {}) {
+    const manualMode = typeof PUMP_OPTIMIZATION_MODE_MANUAL !== 'undefined' ? PUMP_OPTIMIZATION_MODE_MANUAL : 'Manual';
+    const autoMode = typeof PUMP_OPTIMIZATION_MODE_AUTO !== 'undefined' ? PUMP_OPTIMIZATION_MODE_AUTO : 'Auto';
+    if (![manualMode, autoMode].includes(props.optimizationMode)) {
+        props.optimizationMode = manualMode;
+    }
+
     props.designFlow = clampPumpNumber(props.designFlow, 100, 0.001, 1000000);
     props.designHead = clampPumpNumber(props.designHead, 40, 0.001, 1000000);
     props.designEfficiency = clampPumpNumber(props.designEfficiency, 75, 1, 95);
@@ -36,6 +42,11 @@ function normalizePumpProps(props = {}) {
     return props;
 }
 
+function isPumpAutoOptimizationEnabled(pump) {
+    const autoMode = typeof PUMP_OPTIMIZATION_MODE_AUTO !== 'undefined' ? PUMP_OPTIMIZATION_MODE_AUTO : 'Auto';
+    return pump?.props?.optimizationMode === autoMode;
+}
+
 function interpolatePumpCurvePoint(curveData, q, key) {
     const data = (curveData || [])
         .filter(point => Number.isFinite(toPumpNumber(point.flow, NaN)))
@@ -62,27 +73,72 @@ function interpolatePumpCurvePoint(curveData, q, key) {
     return 0;
 }
 
+function getValidPumpCurveData(curveData) {
+    return (curveData || [])
+        .map(point => ({
+            flow: toPumpNumber(point.flow, NaN),
+            head: toPumpNumber(point.head, NaN),
+            eff: toPumpNumber(point.eff, NaN),
+            npshr: toPumpNumber(point.npshr, NaN)
+        }))
+        .filter(point => (
+            Number.isFinite(point.flow)
+            && Number.isFinite(point.head)
+            && Number.isFinite(point.eff)
+            && Number.isFinite(point.npshr)
+            && point.flow >= 0
+            && point.head >= 0
+            && point.eff >= 0
+            && point.npshr >= 0
+        ))
+        .sort((a, b) => a.flow - b.flow);
+}
+
+function getAdvancedPumpCurveWarnings(curve, rawCount) {
+    const warnings = [];
+    if (curve.length !== rawCount) {
+        warnings.push('Some pump curve rows are invalid and were ignored.');
+    }
+    for (let i = 1; i < curve.length; i++) {
+        if (curve[i].flow <= curve[i - 1].flow) {
+            warnings.push('Pump curve flow points must be strictly increasing for reliable interpolation.');
+            break;
+        }
+    }
+    for (let i = 1; i < curve.length; i++) {
+        if (curve[i].head > curve[i - 1].head) {
+            warnings.push('Pump head curve is not monotonically decreasing; verify manufacturer/test data.');
+            break;
+        }
+    }
+    return warnings;
+}
+
 function createPumpPerformanceModel(pump) {
     const props = normalizePumpProps(pump.props || {});
 
     if (props.inputMode === 'Advanced' && props.curveData && props.curveData.length > 0) {
-        const curve = props.curveData
-            .map(point => ({ ...point, flow: toPumpNumber(point.flow) }))
-            .sort((a, b) => a.flow - b.flow);
-        const bestPoint = curve.reduce((best, point) => (
-            toPumpNumber(point.eff) > toPumpNumber(best.eff) ? point : best
-        ), curve[0]);
-        props.bepFlow = clampPumpNumber(props.bepFlow, toPumpNumber(bestPoint.flow, props.designFlow), 0.001, 1000000);
+        const rawCount = props.curveData.length;
+        const curve = getValidPumpCurveData(props.curveData);
+        if (curve.length >= 2) {
+            const bestPoint = curve.reduce((best, point) => (
+                toPumpNumber(point.eff) > toPumpNumber(best.eff) ? point : best
+            ), curve[0]);
+            props.bepFlow = clampPumpNumber(props.bepFlow, toPumpNumber(bestPoint.flow, props.designFlow), 0.001, 1000000);
 
-        return {
-            source: 'Advanced curve',
-            bepFlow: props.bepFlow,
-            minFlow: Math.max(0, toPumpNumber(curve[0].flow)),
-            maxFlow: Math.max(...curve.map(point => toPumpNumber(point.flow))),
-            getHead: q => Math.max(0, interpolatePumpCurvePoint(curve, q, 'head')),
-            getEfficiency: q => Math.max(0, interpolatePumpCurvePoint(curve, q, 'eff')),
-            getNpshr: q => Math.max(0, interpolatePumpCurvePoint(curve, q, 'npshr'))
-        };
+            return {
+                source: 'Advanced manufacturer/test curve',
+                modelBasis: 'User-entered pump performance data',
+                warnings: getAdvancedPumpCurveWarnings(curve, rawCount),
+                isEstimated: false,
+                bepFlow: props.bepFlow,
+                minFlow: Math.max(0, toPumpNumber(curve[0].flow)),
+                maxFlow: Math.max(...curve.map(point => toPumpNumber(point.flow))),
+                getHead: q => Math.max(0, interpolatePumpCurvePoint(curve, q, 'head')),
+                getEfficiency: q => Math.max(0, interpolatePumpCurvePoint(curve, q, 'eff')),
+                getNpshr: q => Math.max(0, interpolatePumpCurvePoint(curve, q, 'npshr'))
+            };
+        }
     }
 
     const qBep = props.bepFlow || props.designFlow;
@@ -95,6 +151,12 @@ function createPumpPerformanceModel(pump) {
 
     return {
         source: 'Basic estimated curve',
+        modelBasis: 'Generic sizing estimate',
+        warnings: [
+            'Basic curve is a generic estimate, not an HI/manufacturer certified performance curve.',
+            'For academic or HI-aligned work, use Advanced mode with manufacturer/test curve data and project-specific POR/AOR limits.'
+        ],
+        isEstimated: true,
         bepFlow: qBep,
         minFlow: 0,
         maxFlow: runoutFlow,
@@ -298,6 +360,10 @@ function optimizePumpBasicParameters(pumpId, model = globalModel, connectionList
             warnings.push('Target flow taken from upstream SRC flow input.');
         }
     }
+    if (context.networkWarnings && context.networkWarnings.length) {
+        warnings.push(...context.networkWarnings);
+    }
+    warnings.push('Auto optimization creates a Basic estimated pump sizing curve; use Advanced manufacturer/test data for HI-aligned academic validation.');
 
     pump.props.inputMode = 'Basic';
     pump.props.designFlow = Number(targetFlow.toFixed(3));

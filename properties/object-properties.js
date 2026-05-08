@@ -80,6 +80,75 @@ function appendSectionHeader(tbody, title) {
     tbody.appendChild(tr);
 }
 
+function renderTankAdvancedInventoryData(nodeId, node, tbody) {
+    const tr = document.createElement('tr');
+    tr.className = 'tank-advanced-inventory-row';
+    tr.innerHTML = `
+        <td colspan="2" class="advanced-section-cell">
+            <details class="advanced-section tank-advanced-inventory">
+                <summary>Advanced Inventory Data</summary>
+                <table class="advanced-section-table">
+                    <tbody>
+                        <tr>
+                            <td class="prop-label">Tank Diameter</td>
+                            <td class="prop-value"><input class="prop-input-field tank-inventory-input" type="number" data-node="${escapeHtml(nodeId)}" data-key="diameter" value="${escapeHtml(node.props.diameter)}"> m</td>
+                        </tr>
+                        <tr>
+                            <td class="prop-label">Total Volume</td>
+                            <td class="prop-value" data-key="volume">${formatReadoutValue(node.props.volume)} m3</td>
+                        </tr>
+                        <tr>
+                            <td class="prop-label">Current Level</td>
+                            <td class="prop-value"><input class="prop-input-field tank-inventory-input" type="number" data-node="${escapeHtml(nodeId)}" data-key="liquidLevel" value="${escapeHtml(node.props.liquidLevel)}"> m</td>
+                        </tr>
+                        <tr>
+                            <td class="prop-label">High Liquid Level (HLL)</td>
+                            <td class="prop-value"><input class="prop-input-field tank-inventory-input" type="number" data-node="${escapeHtml(nodeId)}" data-key="hll" value="${escapeHtml(node.props.hll)}"> m</td>
+                        </tr>
+                        <tr>
+                            <td class="prop-label">Normal Liq. Level (NLL)</td>
+                            <td class="prop-value"><input class="prop-input-field tank-inventory-input" type="number" data-node="${escapeHtml(nodeId)}" data-key="nll" value="${escapeHtml(node.props.nll)}"> m</td>
+                        </tr>
+                        <tr>
+                            <td class="prop-label">Low Liquid Level (LLL)</td>
+                            <td class="prop-value"><input class="prop-input-field tank-inventory-input" type="number" data-node="${escapeHtml(nodeId)}" data-key="lll" value="${escapeHtml(node.props.lll)}"> m</td>
+                        </tr>
+                        <tr>
+                            <td class="prop-label">Transmitter Elev.</td>
+                            <td class="prop-value"><input class="prop-input-field tank-inventory-input" type="number" data-node="${escapeHtml(nodeId)}" data-key="tLevelElev" value="${escapeHtml(node.props.tLevelElev)}"> m</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </details>
+        </td>
+    `;
+    tbody.appendChild(tr);
+
+    tr.querySelectorAll('.tank-inventory-input').forEach(input => {
+        input.addEventListener('blur', () => {
+            if (typeof releaseSidebarEditCapture === 'function') releaseSidebarEditCapture(input);
+        });
+        input.addEventListener('input', event => {
+            const key = event.target.dataset.key;
+            const value = parseFloat(event.target.value) || 0;
+            if (typeof captureSidebarEdit === 'function') captureSidebarEdit(event.target);
+            node.props[key] = value;
+
+            if (key === 'diameter' || key === 'liquidLevel') {
+                node.props.volume = typeof calculateTankLiquidVolume === 'function'
+                    ? calculateTankLiquidVolume(node.props.diameter || 0, node.props.liquidLevel || 0)
+                    : node.props.volume;
+                const volumeCell = tr.querySelector('[data-key="volume"]');
+                if (volumeCell) volumeCell.textContent = `${formatReadoutValue(node.props.volume)} m3`;
+            }
+
+            if (typeof updateSimulation === 'function') {
+                updateSimulation({ renderSidebarAfter: false });
+            }
+        });
+    });
+}
+
 function renderSinkReadoutCards(node, tbody) {
     const results = node.results || {};
     const warnings = results.warnings || [];
@@ -156,7 +225,15 @@ function renderTankReadoutCards(node, tbody) {
                     <strong class="prop-value" data-key="tank-connected-pipes">${escapeHtml((results.connectedPipes || []).join(', ') || '-')}</strong>
                 </div>
                 <div class="boundary-result-card">
-                    <span>Calculated Pressure</span>
+                    <span>Connected Sources</span>
+                    <strong class="prop-value" data-key="tank-connected-sources">${escapeHtml((results.connectedSources || []).join(', ') || '-')}</strong>
+                </div>
+                <div class="boundary-result-card boundary-result-card-wide">
+                    <span>Pressure Basis</span>
+                    <strong class="prop-value" data-key="tank-pressure-basis">${escapeHtml(results.pressureBasis || '-')}</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Connected Pressure</span>
                     <strong class="prop-value" data-key="tank-calculated-pressure">${formatReadoutValue(results.calculatedPressure)} bar a</strong>
                 </div>
                 <div class="boundary-result-card">
@@ -170,6 +247,26 @@ function renderTankReadoutCards(node, tbody) {
                 <div class="boundary-result-card">
                     <span>Stagnation P</span>
                     <strong class="prop-value" data-key="tank-stagnation-pressure">${formatReadoutValue(results.stagnationPressure)} bar a</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Inlet Flow</span>
+                    <strong class="prop-value" data-key="tank-inlet-flow">${formatReadoutValue(results.inletFlow)} m3/h</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Outlet Flow</span>
+                    <strong class="prop-value" data-key="tank-outlet-flow">${formatReadoutValue(results.outletFlow)} m3/h</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Net Flow</span>
+                    <strong class="prop-value" data-key="tank-net-flow">${formatReadoutValue(results.netFlow)} m3/h</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>SRC Feed Flow</span>
+                    <strong class="prop-value" data-key="tank-source-feed-flow">${formatReadoutValue(results.sourceFeedFlow)} m3/h</strong>
+                </div>
+                <div class="boundary-result-card boundary-result-card-wide">
+                    <span>Hydraulic Status</span>
+                    <strong class="prop-value" data-key="tank-hydraulic-status">${escapeHtml(results.hydraulicStatus || '-')}</strong>
                 </div>
                 <div class="boundary-result-card">
                     <span>Fluid Vapor P</span>
@@ -213,16 +310,9 @@ function renderObjectProperties(type, nodeId, node, addRow, tbody) {
         const manualMode = typeof TANK_PSV_MODE_MANUAL !== 'undefined' ? TANK_PSV_MODE_MANUAL : 'Manual';
         const psvReadonly = node.props.psvMode === suggestedMode;
 
-        appendSectionHeader(tbody, 'Geometry');
+        appendSectionHeader(tbody, 'Tank Setup');
         addRow('PFD Size', node.props.visualScale, 'visualScale', false, '%', 'number');
         addRow('Base Elevation', node.props.elevation, 'elevation', false, 'm', 'number');
-        addRow('Tank Diameter', node.props.diameter, 'diameter', false, 'm', 'number');
-        addRow('Total Volume', node.props.volume, 'volume', true, 'm3');
-        addRow('Current Level', node.props.liquidLevel, 'liquidLevel', false, 'm', 'number');
-        addRow('High Liquid Level (HLL)', node.props.hll, 'hll', false, 'm', 'number');
-        addRow('Normal Liq. Level (NLL)', node.props.nll, 'nll', false, 'm', 'number');
-        addRow('Low Liquid Level (LLL)', node.props.lll, 'lll', false, 'm', 'number');
-        addRow('Transmitter Elev.', node.props.tLevelElev, 'tLevelElev', false, 'm', 'number');
 
         appendSectionHeader(tbody, 'Pressure & PSV');
         addRow('Operating Pressure', node.props.pressure, 'pressure', false, 'bar a', 'number');
@@ -231,8 +321,9 @@ function renderObjectProperties(type, nodeId, node, addRow, tbody) {
         addRow('PSV Set Pressure', node.props.psvSet, 'psvSet', psvReadonly, 'bar a', 'number');
         addRow('Fluid Vapor Pressure', node.results?.vaporPressure ?? node.props.vaporPressure, 'tank-fluid-vapor-pressure', true, 'bar a');
 
-        appendSectionHeader(tbody, 'Connected Pressure Readout');
+        appendSectionHeader(tbody, 'Pass-through Hydraulic Readout');
         renderTankReadoutCards(node, tbody);
+        renderTankAdvancedInventoryData(nodeId, node, tbody);
         return;
     }
 
@@ -320,6 +411,10 @@ function renderObjectProperties(type, nodeId, node, addRow, tbody) {
         );
     });
 
+    if (type === 'checkValve') {
+        addRow('Check Status', node.props.checkStatus || '-', 'checkStatus', true, '');
+    }
+
     if (typeof isInstrumentType === 'function' && isInstrumentType(type)) {
         const readoutHeader = document.createElement('tr');
         readoutHeader.innerHTML = '<td colspan="2" style="background:#eee; font-weight:bold; padding:4px 8px; text-align:center;">Pipeline Readout</td>';
@@ -327,7 +422,7 @@ function renderObjectProperties(type, nodeId, node, addRow, tbody) {
 
         addRow('Attached Pipe', node.props.attachedTo || '-', 'instrument-attached-to', true);
         if (type === 'lineMonitor') {
-            addRow('Pressure', node.props.measuredPressure, 'instrument-pressure', true, 'bar');
+            addRow('Pressure', node.props.measuredPressure, 'instrument-pressure', true, 'bar a');
             addRow('Flow', node.props.measuredFlow, 'instrument-flow', true, 'm3/h');
             addRow('Temperature', node.props.measuredTemperature, 'instrument-temperature', true, 'deg C');
         } else {

@@ -1,17 +1,23 @@
 function isSidebarEditActive() {
     const active = document.activeElement;
-    return !!(active && active.closest && active.closest('#propTableBody') && active.matches('input, select, textarea'));
+    return !!(active && active.closest && (
+        active.closest('#propTableBody') || active.closest('#pumpPropertiesBody')
+    ) && active.matches('input, select, textarea'));
 }
 
 function setSidebarReadout(key, value, unit = '') {
-    const el = document.querySelector(`.prop-value[data-key="${key}"], strong[data-key="${key}"]`);
-    if (!el) return;
+    const elements = document.querySelectorAll(`.prop-value[data-key="${key}"], strong[data-key="${key}"]`);
+    if (!elements.length) return;
     if (value === null || value === undefined || value === '') {
-        el.textContent = '-';
+        elements.forEach(el => {
+            el.textContent = '-';
+        });
         return;
     }
     const displayValue = formatNumericReadout(value);
-    el.textContent = displayValue + (unit ? ' ' + unit : '');
+    elements.forEach(el => {
+        el.textContent = displayValue + (unit ? ' ' + unit : '');
+    });
 }
 
 function formatReadoutValue(value) {
@@ -84,6 +90,121 @@ function clearSelection() {
         </tr>
     `;
     document.getElementById('editorHint').style.display = 'none';
+    renderPumpPropertiesSidebar(null);
+}
+
+function addPumpPropertiesRow(tbody, label, value, key, options = {}) {
+    const {
+        readonly = true,
+        unit = '',
+        inputType = 'number',
+        choices = []
+    } = options;
+    const tr = document.createElement('tr');
+    const tdLabel = document.createElement('td');
+    tdLabel.className = 'prop-label';
+    tdLabel.textContent = label;
+
+    const tdValue = document.createElement('td');
+    tdValue.className = 'prop-value';
+
+    if (readonly) {
+        if (key) tdValue.dataset.key = key;
+        const displayValue = formatReadoutValue(value);
+        tdValue.textContent = displayValue + (unit && displayValue !== '-' ? ' ' + unit : '');
+    } else {
+        let input;
+        if (inputType === 'select') {
+            input = document.createElement('select');
+            choices.forEach(choice => {
+                const option = document.createElement('option');
+                option.value = choice;
+                option.textContent = choice;
+                if (choice === value) option.selected = true;
+                input.appendChild(option);
+            });
+        } else {
+            input = document.createElement('input');
+            input.type = inputType;
+            input.value = value;
+        }
+
+        input.className = 'prop-input-field pump-limit-input';
+        input.dataset.key = key;
+        tdValue.appendChild(input);
+        if (unit) tdValue.appendChild(document.createTextNode(' ' + unit));
+    }
+
+    tr.appendChild(tdLabel);
+    tr.appendChild(tdValue);
+    tbody.appendChild(tr);
+    return tr;
+}
+
+function addPumpPropertiesSection(tbody, title) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="2" class="prop-section-header">${escapeHtml(title)}</td>`;
+    tbody.appendChild(tr);
+}
+
+function getPumpWarningsText(pump) {
+    return (pump?.results?.warnings || []).join(' | ') || 'OK';
+}
+
+function renderPumpPropertiesSidebar(nodeId) {
+    const panel = document.getElementById('pumpPropertiesSidebar');
+    const header = document.getElementById('pumpPropertiesHeader');
+    const tbody = document.getElementById('pumpPropertiesBody');
+    const node = nodeId ? globalModel[nodeId] : null;
+
+    if (!panel || !header || !tbody) return;
+
+    if (!node || node.type !== 'pump') {
+        panel.hidden = true;
+        header.textContent = 'Select a Pump';
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="2" style="text-align: center; color: #888; padding: 20px;">
+                    Select a pump to view operating results and system residuals.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    if (typeof normalizePumpProps === 'function') normalizePumpProps(node.props);
+    if (typeof ensureNodeResults === 'function') ensureNodeResults(node);
+
+    panel.hidden = false;
+    header.textContent = node.name || nodeId;
+    tbody.innerHTML = '';
+
+    addPumpPropertiesSection(tbody, 'Operating Results');
+    addPumpPropertiesRow(tbody, 'Flow Rate (Q)', node.results.flow, 'result-flow', { unit: 'm3/h' });
+    addPumpPropertiesRow(tbody, 'Total Head', node.results.head, 'result-head', { unit: 'm' });
+    addPumpPropertiesRow(tbody, 'Efficiency', node.results.efficiency, 'result-efficiency', { unit: '%' });
+    addPumpPropertiesRow(tbody, 'Shaft Power', node.results.power, 'result-power', { unit: 'kW' });
+    addPumpPropertiesRow(tbody, 'NPSH Avail.', node.results.npsha, 'result-npsha', { unit: 'm' });
+    addPumpPropertiesRow(tbody, 'NPSH Req.', node.results.npshr, 'result-npshr', { unit: 'm' });
+    addPumpPropertiesRow(tbody, 'NPSH Margin', node.results.npshMargin, 'result-npsh-margin', { unit: 'm' });
+    addPumpPropertiesRow(tbody, 'NPSH Ratio', node.results.npshRatio, 'result-npsh-ratio');
+    addPumpPropertiesRow(tbody, 'BEP Flow Ratio', node.results.bepPercent, 'result-bep-percent', { unit: '% BEP' });
+    addPumpPropertiesRow(tbody, 'Operating Region', node.results.operatingRegion, 'result-operating-region');
+    addPumpPropertiesRow(tbody, 'Status', node.results.status, 'result-status');
+    addPumpPropertiesRow(tbody, 'Warnings', getPumpWarningsText(node), 'result-warnings');
+
+    addPumpPropertiesSection(tbody, 'System Residual');
+    addPumpPropertiesRow(tbody, 'Solve Mode', node.results.solveMode || '-', 'result-solve-mode');
+    addPumpPropertiesRow(tbody, 'Flow Basis', node.results.flowBasis || '-', 'result-flow-basis');
+    addPumpPropertiesRow(tbody, 'Fixed Flow', node.results.fixedFlow, 'result-fixed-flow', { unit: 'm3/h' });
+    addPumpPropertiesRow(tbody, 'Required System Head', node.results.requiredSystemHead, 'result-required-system-head', { unit: 'm' });
+    addPumpPropertiesRow(tbody, 'Pump Head @ Flow', node.results.pumpHeadAtFlow, 'result-pump-head-at-flow', { unit: 'm' });
+    addPumpPropertiesRow(tbody, 'Head Residual', node.results.headResidual, 'result-head-residual', { unit: 'm' });
+    addPumpPropertiesRow(tbody, 'Pressure Residual', node.results.pressureResidual, 'result-pressure-residual', { unit: 'bar' });
+    addPumpPropertiesRow(tbody, 'Downstream Boundary', node.results.downstreamBoundary || '-', 'result-downstream-boundary');
+    addPumpPropertiesRow(tbody, 'Curve Source', node.results.curveSource || '-', 'result-curve-source');
+    addPumpPropertiesRow(tbody, 'Model Basis', node.results.modelBasis || '-', 'result-model-basis');
+    addPumpPropertiesRow(tbody, 'Model Limits', (node.results.modelWarnings || []).join(' | ') || 'None', 'result-model-warnings');
 }
 
 function renderSidebar(nodeId) {
@@ -93,6 +214,7 @@ function renderSidebar(nodeId) {
         return;
     }
 
+    renderPumpPropertiesSidebar(nodeId);
     document.getElementById('propTableHeader').textContent = node.name || nodeId;
     
     const tbody = document.getElementById('propTableBody');
@@ -142,6 +264,7 @@ function renderSidebar(nodeId) {
                 const n = e.target.dataset.node;
                 const v = e.target.type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value;
                 captureSidebarEdit(e.target);
+                const previousValue = globalModel[n].props[k];
                 globalModel[n].props[k] = v;
 
                 if (isVisualResizableType(globalModel[n].type) && k === 'visualScale') {
@@ -227,7 +350,21 @@ function renderSidebar(nodeId) {
                 }
 
                 if (globalModel[n].type === 'pipe' && k === 'routeStyle') {
+                    if (typeof normalizePipeProps === 'function') normalizePipeProps(globalModel[n].props);
                     drawConnections();
+                    renderSidebar(n);
+                    updateSimulation({ renderSidebarAfter: false });
+                    return;
+                }
+
+                if (globalModel[n].type === 'valve' && k === 'valveType' && typeof getValveDefaultK === 'function') {
+                    const previousDefaultK = getValveDefaultK(previousValue);
+                    const currentK = parseFloat(globalModel[n].props.kValue);
+                    if (!Number.isFinite(currentK) || Math.abs(currentK - previousDefaultK) < 1e-9) {
+                        globalModel[n].props.kValue = getValveDefaultK(v);
+                    }
+                    renderSidebar(n);
+                    updateSimulation({ renderSidebarAfter: false });
                     return;
                 }
 
@@ -426,12 +563,15 @@ function renderSidebar(nodeId) {
             updateSimulation();
         });
         
+        const manualOptMode = typeof PUMP_OPTIMIZATION_MODE_MANUAL !== 'undefined' ? PUMP_OPTIMIZATION_MODE_MANUAL : 'Manual';
+        const autoOptMode = typeof PUMP_OPTIMIZATION_MODE_AUTO !== 'undefined' ? PUMP_OPTIMIZATION_MODE_AUTO : 'Auto';
+        addRow('Optimization Mode', node.props.optimizationMode || manualOptMode, 'optimizationMode', false, '', 'select', [manualOptMode, autoOptMode]);
         addRow('Elevation', node.props.elevation, 'elevation', false, 'm', 'number');
 
         const optTr = document.createElement('tr');
         optTr.innerHTML = `
             <td colspan="2" style="padding: 8px 12px;">
-                <button class="btn-add-segment" data-node="${nodeId}" id="btnOptimizePump">Auto Optimize Basic Pump</button>
+                <button class="btn-add-segment" data-node="${nodeId}" id="btnOptimizePump">Run Pump Optimization Now</button>
             </td>
         `;
         tbody.appendChild(optTr);
@@ -555,7 +695,7 @@ function renderSidebar(nodeId) {
         }
 
         const hiHeader = document.createElement('tr');
-        hiHeader.innerHTML = '<td colspan="2" style="background:#eee; font-weight:bold; padding:4px 8px; text-align:center;">HI Operating Checks</td>';
+        hiHeader.innerHTML = '<td colspan="2" style="background:#eee; font-weight:bold; padding:4px 8px; text-align:center;">Pump Operating Limits</td>';
         tbody.appendChild(hiHeader);
 
         addRow('BEP Flow', node.props.bepFlow, 'bepFlow', false, 'm3/h', 'number');
@@ -565,24 +705,6 @@ function renderSidebar(nodeId) {
         addRow('AOR Max', node.props.aorMaxPercent, 'aorMaxPercent', false, '% BEP', 'number');
         addRow('Min NPSH Ratio', node.props.minNpshMarginRatio, 'minNpshMarginRatio', false, '', 'number');
         addRow('Min NPSH Margin', node.props.minNpshMargin, 'minNpshMargin', false, 'm', 'number');
-        
-        // Add a separator for results
-        const resHeader = document.createElement('tr');
-        resHeader.innerHTML = '<td colspan="2" style="background:#eee; font-weight:bold; padding:4px 8px; text-align:center;">Operating Results</td>';
-        tbody.appendChild(resHeader);
-        
-        addRow('Flow Rate (Q)', node.results.flow, 'result-flow', true, 'm3/h');
-        addRow('Total Head', node.results.head, 'result-head', true, 'm');
-        addRow('Efficiency', node.results.efficiency, 'result-efficiency', true, '%');
-        addRow('Shaft Power', node.results.power, 'result-power', true, 'kW');
-        addRow('NPSH Avail.', node.results.npsha, 'result-npsha', true, 'm');
-        addRow('NPSH Req.', node.results.npshr, 'result-npshr', true, 'm');
-        addRow('NPSH Margin', node.results.npshMargin, 'result-npsh-margin', true, 'm');
-        addRow('NPSH Ratio', node.results.npshRatio, 'result-npsh-ratio', true, '');
-        addRow('BEP Flow Ratio', node.results.bepPercent, 'result-bep-percent', true, '% BEP');
-        addRow('Operating Region', node.results.operatingRegion, 'result-operating-region', true, '');
-        addRow('Status', node.results.status, 'result-status', true, '');
-        addRow('Warnings', (node.results.warnings || []).join(' | ') || 'OK', 'result-warnings', true, '');
     } else if (node.type === 'pipe') {
         if (node.props.routeStyle === undefined) node.props.routeStyle = 'Straight';
         normalizePipeProps(node.props);
@@ -592,6 +714,9 @@ function renderSidebar(nodeId) {
         const segmentResults = calculatePipeHydraulicSegments(flowForPipe, node.props);
         const segmentResultByIndex = new Map(segmentResults.map(result => [result.index, result]));
         const totalHeadLoss = segmentResults.reduce((sum, result) => sum + result.totalLoss, 0);
+        const totalMajorLoss = segmentResults.reduce((sum, result) => sum + result.majorLoss, 0);
+        const totalFittingLoss = segmentResults.reduce((sum, result) => sum + result.minorLoss, 0);
+        const totalMinorK = segmentResults.reduce((sum, result) => sum + result.minorLossK, 0);
 
         const pipeResultsTr = document.createElement('tr');
         pipeResultsTr.innerHTML = `
@@ -617,6 +742,18 @@ function renderSidebar(nodeId) {
                         <span>Total Head Loss</span>
                         <strong data-key="pipe-head-loss">${formatReadoutValue(totalHeadLoss)} m</strong>
                     </div>
+                    <div class="pipe-result-card">
+                        <span>Major Loss</span>
+                        <strong data-key="pipe-major-loss">${formatReadoutValue(totalMajorLoss)} m</strong>
+                    </div>
+                    <div class="pipe-result-card">
+                        <span>Fitting Loss</span>
+                        <strong data-key="pipe-fitting-loss">${formatReadoutValue(totalFittingLoss)} m</strong>
+                    </div>
+                    <div class="pipe-result-card">
+                        <span>Total K</span>
+                        <strong data-key="pipe-total-k">${formatReadoutValue(totalMinorK)}</strong>
+                    </div>
                 </div>
             </td>
         `;
@@ -640,6 +777,7 @@ function renderSidebar(nodeId) {
         segTd.style.padding = '0';
         const pipeSizeOptionsHtml = (PIPE_SIZE_OPTIONS || []).map(option => `<option value="${escapeHtml(option.label)}">${escapeHtml(option.label)}</option>`).join('');
         const materialOptionsHtml = (PIPE_MATERIAL_OPTIONS || []).map(option => `<option value="${escapeHtml(option.label)}">${escapeHtml(option.label)}</option>`).join('');
+        const fittingOptionsHtml = (PIPE_FITTING_OPTIONS || []).map(option => `<option value="${escapeHtml(option.label)}">${escapeHtml(option.label)}</option>`).join('');
         let segHtml = `
             <div style="padding: 10px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -656,11 +794,17 @@ function renderSidebar(nodeId) {
                                 <th>Len (m)</th>
                                 <th>Material</th>
                                 <th>eps (mm)</th>
-                                <th>K</th>
+                                <th>Fitting</th>
+                                <th>Qty</th>
+                                <th>K each</th>
+                                <th>Add K</th>
+                                <th>Total K</th>
                                 <th>V (m/s)</th>
                                 <th>Re</th>
                                 <th>f</th>
-                                <th>hL (m)</th>
+                                <th>Major hL</th>
+                                <th>Fitting hL</th>
+                                <th>Total hL</th>
                                 <th></th>
                             </tr>
                         </thead>
@@ -670,6 +814,7 @@ function renderSidebar(nodeId) {
         node.props.segments.forEach((seg, i) => {
             const result = segmentResultByIndex.get(i) || {};
             const diameterReadonly = seg.pipeSize !== 'Custom diameter' ? 'readonly' : '';
+            const fittingKReadonly = seg.fittingType !== PIPE_FITTING_CUSTOM ? 'readonly' : '';
             segHtml += `
                 <tr>
                     <td><input type="text" class="segment-input" data-idx="${i}" data-field="name" value="${escapeHtml(seg.name)}"></td>
@@ -678,10 +823,16 @@ function renderSidebar(nodeId) {
                     <td><input type="number" class="segment-input" data-idx="${i}" data-field="length" value="${formatEngineeringValue(seg.length, 2)}" step="0.1"></td>
                     <td><select class="segment-input" data-idx="${i}" data-field="material" data-value="${escapeHtml(seg.material)}">${materialOptionsHtml}</select></td>
                     <td><input type="number" class="segment-input" data-idx="${i}" data-field="roughnessMm" value="${formatEngineeringValue((seg.roughness || 0) * 1000, 4)}" step="0.001"></td>
+                    <td><select class="segment-input" data-idx="${i}" data-field="fittingType" data-value="${escapeHtml(seg.fittingType)}">${fittingOptionsHtml}</select></td>
+                    <td><input type="number" class="segment-input" data-idx="${i}" data-field="fittingQuantity" value="${formatEngineeringValue(seg.fittingQuantity || 0, 0)}" step="1"></td>
+                    <td><input type="number" class="segment-input" data-idx="${i}" data-field="fittingK" value="${formatEngineeringValue(seg.fittingK || 0, 3)}" step="0.01" ${fittingKReadonly}></td>
                     <td><input type="number" class="segment-input" data-idx="${i}" data-field="minorLoss" value="${formatEngineeringValue(seg.minorLoss || 0, 2)}" step="0.1"></td>
+                    <td class="segment-readout" data-segment-result="minorLossK">${formatEngineeringValue(result.minorLossK, 2)}</td>
                     <td class="segment-readout" data-segment-result="velocity">${formatEngineeringValue(result.velocity, 2)}</td>
                     <td class="segment-readout" data-segment-result="reynolds">${Number.isFinite(result.reynolds) ? Math.round(result.reynolds).toLocaleString() : '-'}</td>
                     <td class="segment-readout" data-segment-result="frictionFactor">${formatEngineeringValue(result.frictionFactor, 4)}</td>
+                    <td class="segment-readout" data-segment-result="majorLoss">${formatEngineeringValue(result.majorLoss, 2)}</td>
+                    <td class="segment-readout" data-segment-result="fittingLoss">${formatEngineeringValue(result.minorLoss, 2)}</td>
                     <td class="segment-readout" data-segment-result="totalLoss">${formatEngineeringValue(result.totalLoss, 2)}</td>
                     <td><button class="btn-remove-segment" data-idx="${i}" data-node="${nodeId}">X</button></td>
                 </tr>
@@ -708,22 +859,34 @@ function renderSidebar(nodeId) {
             const updatedFlow = node.results && node.results.pressureCalculated ? parseFloat(node.results.flow) || 0 : 0;
             const updatedDetails = new Map(calculatePipeHydraulicSegments(updatedFlow, node.props).map(result => [result.index, result]));
             const updatedHeadLoss = [...updatedDetails.values()].reduce((sum, result) => sum + result.totalLoss, 0);
+            const updatedMajorLoss = [...updatedDetails.values()].reduce((sum, result) => sum + result.majorLoss, 0);
+            const updatedFittingLoss = [...updatedDetails.values()].reduce((sum, result) => sum + result.minorLoss, 0);
+            const updatedTotalK = [...updatedDetails.values()].reduce((sum, result) => sum + result.minorLossK, 0);
 
             setSidebarReadout('pipe-flow', node.results?.flow ?? 0, 'm3/h');
             setSidebarReadout('pipe-pressure', node.results?.pressure, 'bar');
             setSidebarReadout('pipe-inlet-pressure', node.results?.inletPressure, 'bar');
             setSidebarReadout('pipe-outlet-pressure', node.results?.outletPressure, 'bar');
             setSidebarReadout('pipe-head-loss', updatedHeadLoss, 'm');
+            setSidebarReadout('pipe-major-loss', updatedMajorLoss, 'm');
+            setSidebarReadout('pipe-fitting-loss', updatedFittingLoss, 'm');
+            setSidebarReadout('pipe-total-k', updatedTotalK, '');
 
             segTd.querySelectorAll('#pipeSegmentTable tbody tr').forEach((row, idx) => {
                 const result = updatedDetails.get(idx) || {};
                 const velocityCell = row.querySelector('[data-segment-result="velocity"]');
                 const reynoldsCell = row.querySelector('[data-segment-result="reynolds"]');
                 const frictionCell = row.querySelector('[data-segment-result="frictionFactor"]');
+                const totalKCell = row.querySelector('[data-segment-result="minorLossK"]');
+                const majorLossCell = row.querySelector('[data-segment-result="majorLoss"]');
+                const fittingLossCell = row.querySelector('[data-segment-result="fittingLoss"]');
                 const totalLossCell = row.querySelector('[data-segment-result="totalLoss"]');
                 if (velocityCell) velocityCell.textContent = formatEngineeringValue(result.velocity, 2);
                 if (reynoldsCell) reynoldsCell.textContent = Number.isFinite(result.reynolds) ? Math.round(result.reynolds).toLocaleString() : '-';
                 if (frictionCell) frictionCell.textContent = formatEngineeringValue(result.frictionFactor, 4);
+                if (totalKCell) totalKCell.textContent = formatEngineeringValue(result.minorLossK, 2);
+                if (majorLossCell) majorLossCell.textContent = formatEngineeringValue(result.majorLoss, 2);
+                if (fittingLossCell) fittingLossCell.textContent = formatEngineeringValue(result.minorLoss, 2);
                 if (totalLossCell) totalLossCell.textContent = formatEngineeringValue(result.totalLoss, 2);
             });
         };
@@ -765,6 +928,15 @@ function renderSidebar(nodeId) {
                 if (field === 'roughnessMm') {
                     segment.roughness = Math.max(0, (parseFloat(e.target.value) || 0) / 1000);
                     if (segment.material !== 'Custom roughness') segment.material = 'Custom roughness';
+                } else if (field === 'fittingK') {
+                    segment.routeFittingAuto = false;
+                    segment.fittingType = PIPE_FITTING_CUSTOM;
+                    segment.fittingK = Math.max(0, parseFloat(e.target.value) || 0);
+                    const fittingSelect = e.target.closest('tr')?.querySelector('[data-field="fittingType"]');
+                    if (fittingSelect) fittingSelect.value = PIPE_FITTING_CUSTOM;
+                } else if (field === 'fittingQuantity' || field === 'minorLoss') {
+                    segment.routeFittingAuto = false;
+                    segment[field] = Math.max(0, parseFloat(e.target.value) || 0);
                 } else if (e.target.type === 'number') {
                     segment[field] = Math.max(0, parseFloat(e.target.value) || 0);
                 } else {
@@ -779,6 +951,26 @@ function renderSidebar(nodeId) {
                 const field = e.target.dataset.field;
                 const segment = node.props.segments[idx];
                 if (segment) captureSidebarEdit(e.target);
+                if (segment && field === 'fittingType') {
+                    segment.routeFittingAuto = false;
+                    segment.fittingType = e.target.value;
+                    const fittingOption = getPipeFittingOption(segment.fittingType);
+                    if (fittingOption.label !== PIPE_FITTING_CUSTOM) {
+                        segment.fittingType = fittingOption.label;
+                        segment.fittingK = fittingOption.k || 0;
+                    } else {
+                        segment.fittingK = Math.max(0, parseFloat(segment.fittingK) || 0);
+                    }
+                    if (segment.fittingType === PIPE_FITTING_NONE) {
+                        segment.fittingQuantity = 0;
+                    } else if (!Number.isFinite(parseFloat(segment.fittingQuantity)) || parseFloat(segment.fittingQuantity) <= 0) {
+                        segment.fittingQuantity = 1;
+                    }
+                    normalizePipeProps(node.props);
+                    renderSidebar(nodeId);
+                    updateSimulation({ renderSidebarAfter: false });
+                    return;
+                }
                 if (segment && field === 'pipeSize') {
                     segment.pipeSize = e.target.value;
                     const sizeOption = getPipeSizeOption(segment.pipeSize);
@@ -810,6 +1002,9 @@ function renderSidebar(nodeId) {
                 diameter: 0.1,
                 length: 10,
                 roughness: 0.000045,
+                fittingType: PIPE_FITTING_NONE,
+                fittingQuantity: 0,
+                fittingK: 0,
                 minorLoss: 0
             });
             renderSidebar(nodeId);

@@ -1,5 +1,9 @@
+const PUMP_OPTIMIZATION_MODE_MANUAL = 'Manual';
+const PUMP_OPTIMIZATION_MODE_AUTO = 'Auto';
+
 const PUMP_DEFAULT_PROPS = {
     inputMode: 'Basic',
+    optimizationMode: PUMP_OPTIMIZATION_MODE_MANUAL,
     elevation: 0,
     designFlow: 100,
     designHead: 40,

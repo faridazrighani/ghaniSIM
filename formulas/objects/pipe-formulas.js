@@ -46,7 +46,20 @@ function calculatePipeHydraulicSegments(flowRateM3H, pipeProps) {
         const frictionFactor = calculateFrictionFactor(reynolds, toPipeCalcNumber(seg.roughness, 0.000045), diameter);
         const velocityHead = Math.pow(velocity, 2) / (2 * GRAVITY);
         const majorLoss = frictionFactor * (length / diameter) * velocityHead;
-        const minorLoss = toPipeCalcNumber(seg.minorLoss) * velocityHead;
+        const fittingK = typeof getPipeFittingK === 'function'
+            ? getPipeFittingK(seg)
+            : Math.max(0, toPipeCalcNumber(seg.fittingK));
+        const fittingQuantity = Math.max(0, toPipeCalcNumber(seg.fittingQuantity));
+        const fittingTotalK = typeof getPipeFittingTotalK === 'function'
+            ? getPipeFittingTotalK(seg)
+            : fittingQuantity * fittingK;
+        const additionalK = typeof getPipeAdditionalK === 'function'
+            ? getPipeAdditionalK(seg)
+            : Math.max(0, toPipeCalcNumber(seg.minorLoss));
+        const totalMinorK = fittingTotalK + additionalK;
+        const fittingLoss = fittingTotalK * velocityHead;
+        const additionalLoss = additionalK * velocityHead;
+        const minorLoss = totalMinorK * velocityHead;
 
         details.push({
             index,
@@ -56,11 +69,18 @@ function calculatePipeHydraulicSegments(flowRateM3H, pipeProps) {
             length,
             diameter,
             roughness: toPipeCalcNumber(seg.roughness, 0.000045),
-            minorLossK: toPipeCalcNumber(seg.minorLoss),
+            fittingType: seg.fittingType,
+            fittingQuantity,
+            fittingK,
+            fittingTotalK,
+            additionalK,
+            minorLossK: totalMinorK,
             velocity,
             reynolds,
             frictionFactor,
             majorLoss,
+            fittingLoss,
+            additionalLoss,
             minorLoss,
             totalLoss: majorLoss + minorLoss
         });

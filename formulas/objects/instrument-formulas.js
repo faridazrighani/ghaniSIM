@@ -10,7 +10,7 @@ function toProcessNumber(value) {
 }
 
 function getInstrumentMeasurementUnit(type) {
-    if (type === 'pressureIndicator') return 'bar';
+    if (type === 'pressureIndicator') return 'bar a';
     if (type === 'flowIndicator') return 'm3/h';
     if (type === 'temperatureIndicator') return 'deg C';
     if (type === 'lineMonitor') return '';
@@ -163,7 +163,7 @@ function calculatePipeInstrumentMeasurement(instrument, pipeId, model, connectio
                 temperature: roundInstrumentValue(temperature)
             },
             units: {
-                pressure: 'bar',
+                pressure: 'bar a',
                 flow: 'm3/h',
                 temperature: 'deg C'
             },

@@ -35,6 +35,33 @@ const PIPE_MATERIAL_OPTIONS = [
     { label: 'Custom roughness', roughness: null }
 ];
 
+const PIPE_FITTING_CUSTOM = 'Custom K';
+const PIPE_FITTING_NONE = 'None';
+const PIPE_FITTING_ROUTE_ELBOW = '90 smooth bend - flanged';
+
+const PIPE_FITTING_OPTIONS = [
+    { label: PIPE_FITTING_NONE, k: 0 },
+    { label: 'Sharp-edged entrance', k: 0.5 },
+    { label: 'Reentrant entrance', k: 0.8 },
+    { label: 'Well-rounded entrance', k: 0.03 },
+    { label: 'Submerged exit', k: 1.0 },
+    { label: PIPE_FITTING_ROUTE_ELBOW, k: 0.3 },
+    { label: '90 elbow - threaded', k: 0.9 },
+    { label: '90 miter bend - no vanes', k: 1.1 },
+    { label: '90 miter bend - with vanes', k: 0.2 },
+    { label: '45 elbow - threaded', k: 0.4 },
+    { label: '180 return bend - flanged', k: 0.2 },
+    { label: 'Tee - line flow flanged', k: 0.2 },
+    { label: 'Tee - branch flow flanged', k: 1.0 },
+    { label: 'Threaded union', k: 0.08 },
+    { label: 'Gate valve - fully open', k: 0.2 },
+    { label: 'Globe valve - fully open', k: 10.0 },
+    { label: 'Angle valve - fully open', k: 5.0 },
+    { label: 'Ball valve - fully open', k: 0.05 },
+    { label: 'Swing check valve', k: 2.0 },
+    { label: PIPE_FITTING_CUSTOM, k: null }
+];
+
 const PIPE_DEFAULT_SEGMENTS = [
     {
         name: "Segment 1",
@@ -43,6 +70,9 @@ const PIPE_DEFAULT_SEGMENTS = [
         diameter: 0.1,
         length: 10,
         roughness: 0.000045,
+        fittingType: PIPE_FITTING_NONE,
+        fittingQuantity: 0,
+        fittingK: 0,
         minorLoss: 0
     }
 ];
@@ -55,8 +85,34 @@ function getPipeMaterialOption(label) {
     return PIPE_MATERIAL_OPTIONS.find(item => item.label === label) || PIPE_MATERIAL_OPTIONS[0];
 }
 
+function getPipeFittingOption(label) {
+    return PIPE_FITTING_OPTIONS.find(item => item.label === label) || PIPE_FITTING_OPTIONS[0];
+}
+
+function getPipeFittingK(segment) {
+    const option = getPipeFittingOption(segment?.fittingType);
+    if (option.label === PIPE_FITTING_CUSTOM) {
+        return Math.max(0, parseFloat(segment.fittingK) || 0);
+    }
+    return Math.max(0, parseFloat(option.k) || 0);
+}
+
+function getPipeFittingTotalK(segment) {
+    const quantity = Math.max(0, parseFloat(segment?.fittingQuantity) || 0);
+    return quantity * getPipeFittingK(segment);
+}
+
+function getPipeAdditionalK(segment) {
+    return Math.max(0, parseFloat(segment?.minorLoss) || 0);
+}
+
+function getPipeSegmentTotalK(segment) {
+    return getPipeFittingTotalK(segment) + getPipeAdditionalK(segment);
+}
+
 function normalizePipeProps(pipeProps) {
     if (!pipeProps) return { segments: [] };
+    pipeProps.routeStyle = pipeProps.routeStyle || 'Straight';
     if (!Array.isArray(pipeProps.segments) || pipeProps.segments.length === 0) {
         pipeProps.segments = PIPE_DEFAULT_SEGMENTS.map(segment => ({ ...segment }));
     }
@@ -89,6 +145,46 @@ function normalizePipeProps(pipeProps) {
             segment.minorLoss = index === 0 ? legacyMinorLoss : 0;
         } else {
             segment.minorLoss = Math.max(0, parseFloat(segment.minorLoss) || 0);
+        }
+
+        if (pipeProps.routeStyle !== 'Elbow' && segment.routeFittingAuto) {
+            segment.fittingType = PIPE_FITTING_NONE;
+            segment.fittingQuantity = 0;
+            segment.fittingK = 0;
+            segment.routeFittingAuto = false;
+        }
+
+        const currentFittingType = segment.fittingType || PIPE_FITTING_NONE;
+        const currentFittingQuantity = parseFloat(segment.fittingQuantity) || 0;
+        const currentFittingK = parseFloat(segment.fittingK) || 0;
+        const hasActiveFitting = currentFittingType !== PIPE_FITTING_NONE
+            || currentFittingQuantity > 0
+            || currentFittingK > 0;
+        const shouldAutoElbow = pipeProps.routeStyle === 'Elbow'
+            && index === 0
+            && segment.routeFittingAuto !== false
+            && !hasActiveFitting
+            && segment.minorLoss === 0;
+
+        if (shouldAutoElbow) {
+            segment.fittingType = PIPE_FITTING_ROUTE_ELBOW;
+            segment.fittingQuantity = 1;
+            segment.fittingK = getPipeFittingOption(PIPE_FITTING_ROUTE_ELBOW).k;
+            segment.routeFittingAuto = true;
+        } else {
+            segment.fittingType = segment.fittingType || PIPE_FITTING_NONE;
+            const fittingOption = getPipeFittingOption(segment.fittingType);
+            if (fittingOption.label !== PIPE_FITTING_CUSTOM) {
+                segment.fittingType = fittingOption.label;
+                segment.fittingK = fittingOption.k || 0;
+            } else {
+                segment.fittingK = Math.max(0, parseFloat(segment.fittingK) || 0);
+            }
+            if (segment.fittingQuantity === undefined || segment.fittingQuantity === null || segment.fittingQuantity === '') {
+                segment.fittingQuantity = segment.fittingType === PIPE_FITTING_NONE ? 0 : 1;
+            } else {
+                segment.fittingQuantity = Math.max(0, parseFloat(segment.fittingQuantity) || 0);
+            }
         }
     });
 
