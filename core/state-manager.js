@@ -38,6 +38,14 @@ const SOURCE_BOUNDARY_DATA_INHERIT = 'Inherit from Attached Equipment';
 const SOURCE_PRESSURE_ENERGY_STATIC = 'Static Pressure';
 const SOURCE_PRESSURE_ENERGY_TOTAL = 'Total / Stagnation Pressure';
 const SOURCE_DEFAULT_MASS_FLOW_KGH = 9500;
+const SOURCE_DYNAMIC_CONTRIBUTION_CONTINUOUS = 'Continuous Feed to Tank';
+const SOURCE_DYNAMIC_CONTRIBUTION_INITIAL_ONLY = 'Initial Inventory Only';
+const SOURCE_DYNAMIC_CONTRIBUTION_INACTIVE = 'Inactive';
+const SOURCE_DYNAMIC_CONTRIBUTION_OPTIONS = [
+    SOURCE_DYNAMIC_CONTRIBUTION_CONTINUOUS,
+    SOURCE_DYNAMIC_CONTRIBUTION_INITIAL_ONLY,
+    SOURCE_DYNAMIC_CONTRIBUTION_INACTIVE
+];
 const SINK_BOUNDARY_MODE_FREE = 'Free Outlet / Atmospheric Discharge';
 const SINK_BOUNDARY_MODE_PRESSURE = 'Outlet Pressure Boundary';
 const SINK_BOUNDARY_MODE_FLOW = 'Flow Demand Boundary';
@@ -57,7 +65,12 @@ const globalModel = {
                 lastConfirmedFluid: '',
                 lastConfirmedTemperature: null,
                 lastConfirmedUnitStandard: 'Metric / European Engineering',
-                migratedFromLegacy: false
+                migratedFromLegacy: false,
+                dynamicStepSeconds: 60,
+                dynamicRealtimeIntervalMs: 60000,
+                dynamicSimulationTimeSeconds: 0,
+                dynamicInventoryEnabled: false,
+                lastDynamicStepStatus: 'Not started'
             }
         },
     "FLUID":  { 
@@ -98,11 +111,19 @@ function createDefaultResults(type) {
             inletPressure: null,
             outletPressure: null,
             stagnationPressure: null,
+            pipeInletFlow: null,
+            pipeOutletFlow: null,
             inletFlow: null,
             outletFlow: null,
             netFlow: null,
             levelTrend: '-',
+            levelRate: null,
             sourceFeedFlow: null,
+            dynamicSourceFeedFlow: null,
+            dynamicInletFlow: null,
+            dynamicNetFlow: null,
+            dynamicLevelTrend: '-',
+            dynamicLevelRate: null,
             sourceFeedFlows: [],
             operatingPressureAbsolute: null,
             operatingPressureGauge: null,
@@ -121,6 +142,7 @@ function createDefaultResults(type) {
             ventingStatus: '-',
             geometryStatus: '-',
             emergencyVentProvided: '-',
+            dynamicInventory: null,
             status: '-',
             warnings: [],
             calculationTrace: null
@@ -595,6 +617,9 @@ function normalizeSourceProps(source) {
     if (!source.props.flowInputMode) {
         source.props.flowInputMode = SOURCE_FLOW_MODE_MASS;
     }
+    if (!SOURCE_DYNAMIC_CONTRIBUTION_OPTIONS.includes(source.props.dynamicContributionMode)) {
+        source.props.dynamicContributionMode = SOURCE_DYNAMIC_CONTRIBUTION_CONTINUOUS;
+    }
     if (source.props.pressure === undefined) {
         const atm = typeof ATM_PRESSURE_BAR === 'number' ? ATM_PRESSURE_BAR : 1.01325;
         source.props.pressure = source.props.pressureInputBasis === PRESSURE_INPUT_BASIS_GAUGE ? 0 : atm;
@@ -733,8 +758,17 @@ function detachInstrumentFromPipe(instrumentId) {
         instrument.props.measuredTemperature = null;
         instrument.props.measuredLevel = null;
         instrument.props.measuredLevelPercent = null;
+        instrument.props.setPointLevel = null;
         instrument.props.controllerError = null;
         instrument.props.controllerOutput = null;
+        instrument.props.tankNetFlow = null;
+        instrument.props.tankLevelTrend = null;
+        instrument.props.tankLevelRate = null;
+        instrument.props.requiredOutletFlow = null;
+        if (instrument.results) {
+            instrument.results.levelTrendHistory = [];
+            instrument.results.levelTrendStatus = 'Waiting for tank/vessel level attachment';
+        }
         instrument.props.pressureSignal = null;
         instrument.props.flowSignal = null;
         instrument.props.temperatureSignal = null;

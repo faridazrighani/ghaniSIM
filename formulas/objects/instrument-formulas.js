@@ -9,6 +9,11 @@ function toProcessNumber(value) {
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function toFiniteProcessNumber(value) {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
 function getInstrumentMeasurementUnit(type) {
     if (type === 'pressureIndicator') return 'bar a';
     if (type === 'flowIndicator') return 'm3/h';
@@ -237,9 +242,15 @@ function getStorageLevelSnapshot(targetId, model = {}) {
     if (!target) return null;
 
     const props = target.props || {};
+    const results = target.results || {};
     const warnings = [];
     const baseElevation = toProcessNumber(props.elevation);
     const currentLevel = toProcessNumber(props.liquidLevel);
+    const tankHeight = toFiniteProcessNumber(props.tankHeight);
+    const diameter = toFiniteProcessNumber(props.diameter);
+    const tankArea = Number.isFinite(diameter) && diameter > 0
+        ? (Math.PI / 4) * Math.pow(diameter, 2)
+        : null;
     const hasTankSpan = target.type === 'tank'
         && Number.isFinite(parseFloat(props.hll))
         && Number.isFinite(parseFloat(props.lll));
@@ -254,6 +265,28 @@ function getStorageLevelSnapshot(targetId, model = {}) {
     const levelPercentRaw = span !== 0 ? ((currentLevel - lll) / span) * 100 : null;
     const levelPercent = levelPercentRaw === null ? null : clampInstrumentPercent(levelPercentRaw);
     const liquidSurfaceElevation = baseElevation + currentLevel;
+    const steadySourceFeedFlow = toFiniteProcessNumber(results.sourceFeedFlow);
+    const dynamicSourceFeedFlow = toFiniteProcessNumber(results.dynamicSourceFeedFlow);
+    const sourceFeedFlow = dynamicSourceFeedFlow !== null ? dynamicSourceFeedFlow : steadySourceFeedFlow;
+    const steadyInletFlow = toFiniteProcessNumber(results.inletFlow);
+    const dynamicInletFlow = toFiniteProcessNumber(results.dynamicInletFlow);
+    const inletFlow = dynamicInletFlow !== null ? dynamicInletFlow : steadyInletFlow;
+    const outletFlow = toFiniteProcessNumber(results.outletFlow);
+    const steadyNetFlow = toFiniteProcessNumber(results.netFlow);
+    const dynamicNetFlow = toFiniteProcessNumber(results.dynamicNetFlow);
+    const netFlow = dynamicNetFlow !== null ? dynamicNetFlow : steadyNetFlow;
+    const pipeInletFlowResult = toFiniteProcessNumber(results.pipeInletFlow);
+    const pipeInletFlow = pipeInletFlowResult !== null
+        ? pipeInletFlowResult
+        : (inletFlow !== null && sourceFeedFlow !== null ? Math.max(inletFlow - sourceFeedFlow, 0) : null);
+    const pipeOutletFlow = toFiniteProcessNumber(results.pipeOutletFlow) ?? outletFlow;
+    const steadyLevelRateResult = toFiniteProcessNumber(results.levelRate);
+    const dynamicLevelRateResult = toFiniteProcessNumber(results.dynamicLevelRate);
+    const levelRateResult = dynamicLevelRateResult !== null ? dynamicLevelRateResult : steadyLevelRateResult;
+    const levelRate = levelRateResult !== null
+        ? levelRateResult
+        : (netFlow !== null && Number.isFinite(tankArea) && tankArea > 0 ? netFlow / tankArea : null);
+    const levelTrend = results.dynamicLevelTrend || results.levelTrend || (netFlow === null ? '-' : (Math.abs(netFlow) <= Math.max(0.01, Math.abs(inletFlow || 0) * 0.02) ? 'Balanced' : (netFlow > 0 ? 'Rising' : 'Falling')));
 
     if (!hasTankSpan) {
         warnings.push(`${target.name || targetId} does not define HLL/LLL; LIC level percent uses 0 to fallback upper span for indication only.`);
@@ -277,9 +310,77 @@ function getStorageLevelSnapshot(targetId, model = {}) {
         lll,
         transmitterElevation,
         span,
+        tankHeight,
+        tankArea,
         levelPercent,
         levelPercentRaw,
+        steadySourceFeedFlow,
+        dynamicSourceFeedFlow,
+        sourceFeedFlow,
+        pipeInletFlow,
+        pipeOutletFlow,
+        steadyInletFlow,
+        dynamicInletFlow,
+        inletFlow,
+        outletFlow,
+        steadyNetFlow,
+        dynamicNetFlow,
+        netFlow,
+        levelTrend,
+        steadyLevelTrend: results.levelTrend || null,
+        dynamicLevelTrend: results.dynamicLevelTrend || null,
+        steadyLevelRate: steadyLevelRateResult,
+        dynamicLevelRate: dynamicLevelRateResult,
+        levelRate,
         warnings
+    };
+}
+
+function calculateLevelControllerTargetLevel(setPointPercent, lll, hll) {
+    const setPoint = clampInstrumentPercent(setPointPercent);
+    const low = toFiniteProcessNumber(lll);
+    const high = toFiniteProcessNumber(hll);
+    if (setPoint === null || low === null || high === null || high <= low) return null;
+    return low + (setPoint / 100) * (high - low);
+}
+
+function applyLevelControllerSetPointToTank(
+    instrumentId,
+    model = (typeof globalModel !== 'undefined' ? globalModel : {})
+) {
+    const instrument = model?.[instrumentId];
+    if (!instrument || instrument.type !== 'levelController') {
+        return { ok: false, message: 'Level controller object is not available.' };
+    }
+    const link = typeof getInstrumentLink === 'function' ? getInstrumentLink(instrumentId) : null;
+    const measurement = calculateLevelControllerMeasurement(instrument, link || instrument?.props?.attachedTo || '', model);
+    const values = measurement.values || {};
+    const targetId = values.targetId || instrument?.props?.attachedTo || '';
+    const target = model?.[targetId];
+    const targetLevel = toFiniteProcessNumber(values.setPointLevel);
+
+    if (!target || !['tank', 'separator', 'verticalVessel'].includes(target.type)) {
+        return { ok: false, message: 'LIC is not attached to a tank/vessel level target.' };
+    }
+    if (targetLevel === null) {
+        return { ok: false, message: 'LIC set point cannot be converted to level because LLL/HLL span is invalid.' };
+    }
+
+    if (!target.props) target.props = {};
+    target.props.liquidLevel = Number(targetLevel.toFixed(3));
+    if (target.type === 'tank' && typeof refreshTankInventoryCalculations === 'function') {
+        refreshTankInventoryCalculations(target.props);
+    }
+    if (target.type === 'tank' && typeof updateTankPressureReadout === 'function') {
+        updateTankPressureReadout(targetId);
+    }
+
+    return {
+        ok: true,
+        targetId,
+        level: target.props.liquidLevel,
+        setPoint: values.setPoint,
+        levelPercent: values.setPoint
     };
 }
 
@@ -306,6 +407,7 @@ function calculateLevelControllerMeasurement(instrument, targetIdOrLink, model =
     }
 
     const levelPercent = snapshot.levelPercent;
+    const setPointLevel = calculateLevelControllerTargetLevel(setPoint, snapshot.lll, snapshot.hll);
     const error = Number.isFinite(parseFloat(setPoint)) && Number.isFinite(parseFloat(levelPercent))
         ? Number((setPoint - levelPercent).toFixed(3))
         : null;
@@ -324,6 +426,7 @@ function calculateLevelControllerMeasurement(instrument, targetIdOrLink, model =
             levelPercent: levelPercent === null ? null : roundInstrumentValue(levelPercent, 3),
             levelPercentRaw: snapshot.levelPercentRaw,
             setPoint,
+            setPointLevel: roundInstrumentValue(setPointLevel, 3),
             controllerError: error,
             controllerOutput: controllerOutput === null ? null : roundInstrumentValue(controllerOutput, 3),
             baseElevation: snapshot.baseElevation,
@@ -332,7 +435,28 @@ function calculateLevelControllerMeasurement(instrument, targetIdOrLink, model =
             nll: snapshot.nll,
             lll: snapshot.lll,
             transmitterElevation: snapshot.transmitterElevation,
-            span: snapshot.span
+            span: snapshot.span,
+            tankHeight: snapshot.tankHeight,
+            tankArea: snapshot.tankArea,
+            steadySourceFeedFlow: snapshot.steadySourceFeedFlow,
+            dynamicSourceFeedFlow: snapshot.dynamicSourceFeedFlow,
+            sourceFeedFlow: snapshot.sourceFeedFlow,
+            pipeInletFlow: snapshot.pipeInletFlow,
+            pipeOutletFlow: snapshot.pipeOutletFlow,
+            steadyInletFlow: snapshot.steadyInletFlow,
+            dynamicInletFlow: snapshot.dynamicInletFlow,
+            inletFlow: snapshot.inletFlow,
+            outletFlow: snapshot.outletFlow,
+            steadyNetFlow: snapshot.steadyNetFlow,
+            dynamicNetFlow: snapshot.dynamicNetFlow,
+            netFlow: snapshot.netFlow,
+            levelTrend: snapshot.levelTrend,
+            steadyLevelTrend: snapshot.steadyLevelTrend,
+            dynamicLevelTrend: snapshot.dynamicLevelTrend,
+            steadyLevelRate: snapshot.steadyLevelRate,
+            dynamicLevelRate: snapshot.dynamicLevelRate,
+            levelRate: snapshot.levelRate === null ? null : roundInstrumentValue(snapshot.levelRate, 3),
+            requiredOutletFlow: snapshot.inletFlow === null ? null : roundInstrumentValue(snapshot.inletFlow, 3)
         },
         warnings: snapshot.warnings || []
     };
@@ -456,7 +580,8 @@ function buildInstrumentCalculationTrace(
     ];
     const references = [
         'Application hydraulic snapshot: pipe pressure, flow, and active Fluid Basis temperature.',
-        'Linear process instrument span scaling: (PV - LRV) / (URV - LRV) x 100.'
+        'Linear process instrument span scaling: (PV - LRV) / (URV - LRV) x 100.',
+        'Storage inventory balance: Qnet = Qin - Qout; dL/dt = Qnet / tank cross-sectional area.'
     ];
     const steps = [];
     const readouts = [];
@@ -490,7 +615,9 @@ function buildInstrumentCalculationTrace(
         dependencyChain.push(
             'Tank/Vessel Current Level -> LIC process variable (PV)',
             'LLL and HLL -> level span used for PV percent',
+            'LIC set point and LLL/HLL -> target liquid level',
             'PV percent + set point -> controller error',
+            'Tank Qin and Qout -> net flow, level trend, and level rate',
             'Controller mode -> output signal readout'
         );
 
@@ -498,8 +625,13 @@ function buildInstrumentCalculationTrace(
         readouts.push({ label: 'PV Level', key: 'instrument-measured-level', value: values.level ?? null, unit: 'm' });
         readouts.push({ label: 'PV Level Percent', key: 'instrument-measured', value: values.levelPercent ?? null, unit: '%' });
         readouts.push({ label: 'Controller Set Point', key: 'instrument-set-point', value: values.setPoint ?? roundInstrumentValue(toProcessNumber(props.setPoint)), unit: '%' });
+        readouts.push({ label: 'Set Point Level', key: 'instrument-setpoint-level', value: values.setPointLevel ?? null, unit: 'm' });
         readouts.push({ label: 'Control Error', key: 'instrument-controller-error', value: values.controllerError ?? null, unit: '%' });
         readouts.push({ label: 'Controller Output', key: 'instrument-signal', value: values.controllerOutput ?? null, unit: '%' });
+        readouts.push({ label: 'Tank Net Flow', key: 'instrument-tank-net-flow', value: values.netFlow ?? null, unit: 'm3/h' });
+        readouts.push({ label: 'Level Trend', key: 'instrument-tank-level-trend', value: values.levelTrend || null, unit: '' });
+        readouts.push({ label: 'Level Rate', key: 'instrument-tank-level-rate', value: values.levelRate ?? null, unit: 'm/h' });
+        readouts.push({ label: 'Required Outlet Flow', key: 'instrument-required-outlet-flow', value: values.requiredOutletFlow ?? null, unit: 'm3/h' });
 
         if (!values.targetId) {
             steps.push(createInstrumentTraceStep(
@@ -534,6 +666,38 @@ function buildInstrumentCalculationTrace(
                 values.liquidSurfaceElevation,
                 'm',
                 'Tank/vessel inventory geometry'
+            ));
+            steps.push(createInstrumentTraceStep(
+                'Set point target level',
+                'Lsp = LLL + SP/100 x (HLL - LLL)',
+                `${formatInstrumentTraceNumber(values.lll)} + ${formatInstrumentTraceNumber(values.setPoint)} / 100 x ${formatInstrumentTraceNumber(values.span)} = ${formatInstrumentTraceNumber(values.setPointLevel)} m`,
+                values.setPointLevel,
+                'm',
+                'LIC level set point scaling'
+            ));
+            steps.push(createInstrumentTraceStep(
+                'Tank inventory balance',
+                'Qnet = Qin - Qout',
+                `${formatInstrumentTraceNumber(values.inletFlow)} - ${formatInstrumentTraceNumber(values.outletFlow)} = ${formatInstrumentTraceNumber(values.netFlow)} m3/h`,
+                values.netFlow,
+                'm3/h',
+                'Steady liquid inventory balance'
+            ));
+            steps.push(createInstrumentTraceStep(
+                'Level rate projection',
+                'dL/dt = Qnet / A',
+                `${formatInstrumentTraceNumber(values.netFlow)} / ${formatInstrumentTraceNumber(values.tankArea)} = ${formatInstrumentTraceNumber(values.levelRate)} m/h`,
+                values.levelRate,
+                'm/h',
+                'Steady inventory trend, not dynamic integration'
+            ));
+            steps.push(createInstrumentTraceStep(
+                'Balanced outlet requirement',
+                'Qout,required = Qin',
+                `${formatInstrumentTraceNumber(values.inletFlow)} m3/h inlet requires ${formatInstrumentTraceNumber(values.requiredOutletFlow)} m3/h outlet for balanced level`,
+                values.requiredOutletFlow,
+                'm3/h',
+                'Level remains steady when Qin equals Qout'
             ));
         }
         steps.push(createInstrumentTraceStep(

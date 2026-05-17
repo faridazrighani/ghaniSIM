@@ -14,7 +14,7 @@ No Critical UX/UI blocker was found in the automated test suite. Earlier browser
 - The warning panel can physically cover new objects, especially LIC on the right side of the default canvas placement, blocking click/right-click interaction.
 - Default object placement and live panels can crowd each other, making right-click targets ambiguous around SRC/Tank/Pump/Sink flows.
 
-Overall status: **Audit complete. Practical fix batches 1-24 applied on 2026-05-17 for unit realtime refresh, context-menu-first connection workflow, warning usability, removal of selected-object canvas action buttons, removal of mobile/tablet canvas pan hint, desktop thesis identity readability and exact wording lock, keyboard access, toolbar responsiveness, compact horizontal-scrolling mobile object palette, grouped mobile object overflow, object-menu keyboard navigation, accessibility regression coverage, task-window focus return, nonblocking task-window docking, nonblocking export feedback, internal destructive-action confirmation, clear top-menu intent, confirmed destructive-action result handling, mandatory thesis About startup, and audit-status closure.**
+Overall status: **Audit complete. Practical fix batches 1-29 applied on 2026-05-17 for unit realtime refresh, context-menu-first connection workflow, warning usability, removal of selected-object canvas action buttons, removal of mobile/tablet canvas pan hint, desktop thesis identity readability and exact wording lock, compact no-logo thesis identity beside Solve on small ribbons, iPhone SE 375 x 667 compact identity first-row lock, iPhone SE 667 x 375 compact landscape menu bar visibility, keyboard access, toolbar responsiveness, compact horizontal-scrolling mobile object palette, grouped mobile object overflow now hidden from the ribbon, object-menu keyboard code retained as dormant compatibility, accessibility regression coverage, task-window focus return, nonblocking task-window docking, nonblocking export feedback, internal destructive-action confirmation, clear top-menu intent, confirmed destructive-action result handling, mandatory thesis About startup, mobile pump live-panel readability, and audit-status closure.**
 
 ### Practical Fix Batch 1 Standards
 
@@ -337,17 +337,17 @@ Batch 14 verification:
 
 ### Practical Fix Batch 15 Standards
 
-Very small screens should not rely only on precision drag/drop. Batch 15 added a grouped `Objects` overflow menu on mobile-sized ribbons. Batch 21 supersedes the earlier "hide the dense palette" rule: the object palette must remain visible as the primary compact horizontal-scroll strip on mobile, while the grouped `Objects` menu remains a secondary fallback.
+Very small screens should not rely only on precision drag/drop. Batch 15 added a grouped `Objects` overflow menu on mobile-sized ribbons. Batch 21 superseded the earlier "hide the dense palette" rule: the object palette must remain visible as the primary compact horizontal-scroll strip on mobile. Batch 26 supersedes the visible `Objects` fallback button: the grouped menu markup/code may remain dormant, but the ribbon must not show the `Objects` button.
 
 Grouped object overflow behavior:
 
 | Screen / interaction | Behavior |
 |---|---|
 | Desktop/tablet wide | Existing grouped toolbar palette remains unchanged |
-| Mobile | `Objects` button appears beside the ribbon tools and opens a categorized object menu |
-| Very narrow mobile | Compact horizontal palette remains visible and scrollable; grouped menu remains available as fallback |
-| Menu item click | Uses the existing rightward ribbon-click placement behavior |
-| Accessibility | Button exposes `aria-haspopup`, `aria-expanded`, `aria-controls`; menu items use `role="menuitem"` and Escape closes the menu |
+| Mobile | Compact horizontal object palette remains visible and scrollable; `Objects` button is hidden |
+| Very narrow mobile | Compact horizontal palette remains visible and scrollable; grouped menu remains dormant |
+| Menu item click | If the dormant menu is intentionally re-enabled later, it uses the existing rightward ribbon-click placement behavior |
+| Accessibility | Hidden `Objects` button is not part of the active keyboard workflow; object tools remain accessible through the visible toolbar palette and context menus |
 
 Batch 15 verification:
 
@@ -355,12 +355,12 @@ Batch 15 verification:
 - Added responsive menu styling and very-small-screen palette fallback in `style.css`.
 - Added catalog-driven menu rendering in `ui/canvas-manager.js`.
 - Added static test coverage in `tests/toolbar-object-overflow.cjs`.
-- Browser smoke test at 390px mobile width originally confirmed `Objects` is visible and menu items are grouped from the toolbar catalog. Batch 21 later changed the primary mobile behavior so the object palette remains visible and horizontally scrollable at the same width.
+- Browser smoke test at 390px mobile width originally confirmed `Objects` is visible and menu items are grouped from the toolbar catalog. Batch 21 later changed the primary mobile behavior so the object palette remains visible and horizontally scrollable at the same width. Batch 26 later hides the `Objects` button while preserving the direct palette.
 - Browser smoke screenshot: `docs/ux_ui_fix_batch15_object_menu_smoke.png`.
 
 ### Practical Fix Batch 16 Standards
 
-The grouped `Objects` menu should be usable without precision pointer input. Batch 16 adds keyboard movement inside the mobile object menu while keeping the same catalog-driven add behavior.
+The grouped `Objects` menu originally supported no-precision pointer input. Batch 16 added keyboard movement inside the mobile object menu while keeping the same catalog-driven add behavior. Batch 26 makes that menu dormant because the visible ribbon should now prioritize the direct horizontal object palette.
 
 Object menu keyboard behavior:
 
@@ -382,11 +382,11 @@ Batch 16 verification:
 
 ### Practical Fix Batch 17 Standards
 
-Keyboard accessibility coverage should protect every menu surface that can start modeling work. Batch 17 folds the grouped mobile `Objects` menu into the general keyboard-accessibility regression test so future toolbar/menu edits are checked in one place as well as in the dedicated toolbar-overflow test.
+Keyboard accessibility coverage should protect every active surface that can start modeling work. Batch 17 originally folded the grouped mobile `Objects` menu into the general keyboard-accessibility regression test. Batch 26 changes the active requirement: the hidden `Objects` button must not appear in the ribbon, while object placement remains available through the visible horizontal palette and context-specific workflows.
 
 Batch 17 verification:
 
-- Extended `tests/keyboard-navigation-accessibility.cjs` to verify the `Objects` button, grouped object menu role, menuitem roles, `aria-expanded`, Arrow/Home/End behavior, Escape focus return, and visible focus styling.
+- Extended `tests/keyboard-navigation-accessibility.cjs` to verify the legacy `Objects` menu compatibility hooks and the newer hidden-button lock.
 - No production rebuild was required because Batch 17 only updates audit documentation and test coverage.
 
 ### Practical Fix Batch 18 Standards
@@ -453,7 +453,7 @@ Expected mobile ribbon behavior:
 | Object palette | Visible on iPhone/mobile widths, including around 375px and below 420px |
 | Scroll behavior | Palette owns horizontal scroll with `overflow-x: auto`; page/ribbon do not create page-level horizontal overflow |
 | Object tool size | Compact but readable object buttons; icons and short labels remain visible |
-| Grouped `Objects` menu | May remain as a fallback, but it must not be the only way to add objects on mobile |
+| Grouped `Objects` menu | Hidden from the ribbon; not part of the active mobile workflow |
 | Forbidden regression | `.toolbar-palette` must not be set to `display: none` at very small mobile widths |
 
 Batch 21 verification:
@@ -524,6 +524,117 @@ Batch 24 verification:
 - Strengthened `tests/academic-identity-layout.cjs` to assert the exact approved four-line desktop wording and order.
 - Extended `tools/smoke-first-run-basis-flow.cjs` so browser smoke fails if the runtime desktop ribbon text differs from the approved four-line wording.
 - Extended `tests/first-run-basis-flow.cjs` so the reusable browser smoke lock cannot be removed silently.
+
+### Practical Fix Batch 25 Standards
+
+The pump live parameter panel must remain readable on iPhone/mobile widths. The panel may be compact, but suction/discharge labels, values, and units must not visually stack or overwrite each other.
+
+This behavior is locked. Do not narrow the mobile pump live panel, collapse the label/value/unit columns, or remove the overflow protection unless the audit and regression tests are intentionally updated for a new approved design.
+
+Expected mobile pump live-panel behavior:
+
+| Surface | Expected behavior |
+|---|---|
+| Pump live panel width | Keeps enough width for clear suction/discharge labels while staying within the viewport |
+| Label/value/unit rows | Preserve separate label, value, and unit columns without overlap |
+| Tight spaces | Labels may truncate cleanly, but values and units must remain readable |
+| Regression lock | `pump-live-parameter-panel.cjs` fails if the mobile panel is narrowed back to the overlapping layout |
+
+Batch 25 verification:
+
+- Restored the pump-specific mobile live-panel width instead of inheriting the very narrow generic live-panel width.
+- Restored the pump-specific mobile row grid: label column, numeric value column, and unit column.
+- Added label overflow protection so text truncates cleanly instead of painting over realtime values.
+- Extended `tests/pump-live-parameter-panel.cjs` to lock the mobile readability rule.
+
+### Practical Fix Batch 26 Standards
+
+The ribbon must not show the large `Objects` button with the plus icon. The direct engineering object palette remains the active mobile/tablet workflow and keeps horizontal scrolling.
+
+This behavior is locked. Do not re-enable the `Objects` ribbon button unless the audit and regression tests are intentionally updated for a new approved design.
+
+Expected behavior after Batch 26:
+
+| Surface | Expected behavior |
+|---|---|
+| `Objects` plus button | Hidden on desktop, tablet, iPad, and mobile |
+| Mobile/tablet object access | Uses the visible compact horizontal object palette |
+| Legacy grouped menu markup/code | May remain dormant for compatibility, but must not render as a ribbon button |
+| Critical CSS | Hides the `Objects` button before the full stylesheet loads |
+
+Batch 26 verification:
+
+- Updated `style.css` and critical inline CSS in `index.html` so `.toolbar-object-menu-container` stays `display: none !important`.
+- Updated toolbar, keyboard, first-run smoke, and audit-resolution tests to lock the hidden `Objects` button.
+- Preserved the direct object palette and its horizontal scroll behavior.
+
+### Practical Fix Batch 27 Standards
+
+Compact ribbons should use the empty space to the right of `Solve` for a concise academic identity. This compact identity is text-only, without logo, and is separate from the long desktop thesis identity.
+
+Approved compact academic identity:
+
+```text
+UNTIRTA – Mechanical Engineering
+Pumping Simulation for NPSH Analysis
+Cavitation Potential in Centrifugal Pumps
+Bachelor’s Thesis - Farid Azrighani et al.
+```
+
+Expected behavior after Batch 27:
+
+| Surface | Expected behavior |
+|---|---|
+| Compact/tablet/mobile ribbon | Shows the four-line no-logo identity to the right of `Solve` with proportional larger type |
+| Desktop long ribbon | Keeps the long thesis identity and existing desktop lock |
+| Object palette | Remains visible below the top ribbon row and horizontally scrollable |
+| Regression lock | Browser smoke validates compact identity wording, position right of `Solve`, and no clipping |
+
+Batch 27 verification:
+
+- Added `.academic-compact-identity` after `#btn-solve` in ribbon order.
+- Added compact identity CSS in `style.css` and critical inline CSS in `index.html`.
+- Increased compact identity typography with responsive bounds so the text uses available space without clipping.
+- Extended `tests/academic-identity-layout.cjs` and `tools/smoke-first-run-basis-flow.cjs` to lock the compact identity wording and placement.
+
+### Practical Fix Batch 28 Standards
+
+The compact academic identity must not fall below the `Fluid Basis` and `Solve` top-row controls on iPhone SE sized screens. The locked viewport is 375 x 667.
+
+Expected behavior after Batch 28:
+
+| Surface | Expected behavior |
+|---|---|
+| iPhone SE 375 x 667 ribbon | `Fluid Basis`, `Solve`, and the compact academic identity stay on the same top row |
+| Compact academic identity | Remains immediately to the right of `Solve`, keeps the approved four-line wording, and does not clip |
+| Object palette | Remains on the second ribbon row and keeps horizontal scroll |
+| Regression lock | Browser smoke includes `iphone-se` and fails if the compact identity drops below `Solve` |
+
+Batch 28 verification:
+
+- Updated the `max-width: 420px` ribbon CSS so the Fluid Basis/Solve buttons are compact enough for the identity to remain beside `Solve`.
+- Updated `.academic-compact-identity` iPhone-width sizing in `style.css` and critical inline CSS in `index.html`.
+- Extended `tools/smoke-first-run-basis-flow.cjs` with the `iphone-se` 375 x 667 viewport and `compactAcademicIdentitySameRowAsSolve` assertion.
+- Extended `tests/academic-identity-layout.cjs` so this layout decision is locked in static regression coverage.
+
+### Practical Fix Batch 29 Standards
+
+The top menu bar must remain visible when the application is displayed on iPhone SE landscape size, 667 x 375. The earlier compact-landscape rule that hid `.menu-bar` is no longer approved for this viewport.
+
+Expected behavior after Batch 29:
+
+| Surface | Expected behavior |
+|---|---|
+| iPhone SE 667 x 375 menu bar | `File`, `Edit`, `Process`, `Simulate`, `Tools`, `View`, and `Help` remain visible in a compact top row |
+| Ribbon | Stays below the menu bar with `Fluid Basis`, `Solve`, compact academic identity, and object palette readable |
+| Object palette | Remains visible and usable under the compact identity row |
+| Regression lock | Browser smoke includes `iphone-se-landscape` and fails if the menu bar is hidden |
+
+Batch 29 verification:
+
+- Updated the `max-height: 560px` landscape CSS so `.menu-bar` remains `display: flex` with compact height, padding, gap, and font size.
+- Extended `tools/smoke-first-run-basis-flow.cjs` with the `iphone-se-landscape` 667 x 375 viewport and `menuBarVisible` assertion.
+- Extended `tests/toolbar-responsive-accessibility.cjs` to lock the compact landscape menu bar rule.
 
 ## 2. Audit Method
 
@@ -596,7 +707,7 @@ ALL TESTS PASSED
 | Acceptance item | Result | Notes |
 |---|---:|---|
 | No horizontal overflow | Pass with caveat | Page-level horizontal overflow was false on desktop/tablet/mobile. Canvas has internal horizontal scroll by design because workspace is wider than viewport. |
-| Live panel labels clear | Pass after Batch 1 | SRC/SNK/Pump/Tank boundary labels now use readable wording such as Outlet Flow, Source Press., Vapor Margin, and NPSH at Pump. |
+| Live panel labels clear | Pass after Batch 1 and Batch 25 | SRC/SNK/Pump/Tank boundary labels now use readable wording such as Outlet Flow, Source Press., Vapor Margin, and NPSH at Pump. Mobile pump label/value/unit columns are locked against overlap. |
 | Unit changes realtime | Pass after Batch 1 | Browser smoke confirmed SRC, Tank, Pump, and Sink live panels switch units in realtime after Unit Standard changes. |
 | Task Window does not cover canvas badly | Pass with dock caveat | Object tasks can minimize to dock and toolbar-added objects auto-dock their property task window; intentionally restored task windows can still cover canvas by user choice. |
 | Warning actionable | Pass after Batch 4/7 | Canvas warnings use shorter summaries, retain full detail, open related task context, and append action guidance at the UI layer. |
@@ -915,14 +1026,14 @@ The original fix order has been executed through the practical fix batches:
 4. SRC/SNK live-panel label clarity: completed in Batch 1.
 5. Default object placement spacing and reduced live-panel click-target crowding: completed in Batch 2 and Batch 5.
 6. Keyboard menu/context/task-window accessibility tests: completed in Batch 6.
-7. Toolbar small-screen usability, grouped object overflow, object-menu keyboard navigation, accessibility regression coverage, and compact horizontal-scrolling mobile object palette: completed in Batch 8, Batch 15, Batch 16, Batch 17, and Batch 21.
+7. Toolbar small-screen usability, grouped object overflow compatibility, object-menu keyboard compatibility, accessibility regression coverage, compact horizontal-scrolling mobile object palette, hidden `Objects` ribbon button, and compact academic identity beside `Solve`: completed in Batch 8, Batch 15, Batch 16, Batch 17, Batch 21, Batch 26, and Batch 27.
 8. Nonblocking task-window docking and focus-return behavior: completed in Batch 9 and Batch 18.
 9. Nonblocking export/menu feedback and destructive-action confirmation: completed in Batch 10, Batch 11, and Batch 13.
 10. Top-menu intent clarity: completed in Batch 12.
 
 Remaining optional backlog:
 
-- None from the original practical UX/UI recommendation list. Future mobile usability testing may still suggest refinements, but the grouped object overflow recommendation is implemented and the mobile object palette is now locked as visible/horizontally scrollable.
+- None from the original practical UX/UI recommendation list. Future mobile usability testing may still suggest refinements, but the mobile object palette is now locked as visible/horizontally scrollable and the `Objects` ribbon button is locked hidden.
 
 ## 8. Verification Evidence
 
@@ -964,9 +1075,14 @@ Observed:
 - Batch 22 static verification and reusable browser smoke confirmed the `Pan / scroll canvas` pill no longer renders on desktop, tablet landscape, or mobile.
 - Batch 23 static verification and reusable browser smoke confirmed the desktop ribbon thesis identity remains visible without clipped text.
 - Batch 24 static verification and reusable browser smoke locked the exact desktop Academic identity wording, order, and four-line structure.
-- Final viewport smoke confirmed the thesis startup and first-run basis flow on desktop, tablet landscape, and mobile: the Help > About dialog is mandatory-visible on browser open, the startup Fluid Basis shell remains available behind it with `Open Setup`, closing About does not minimize the setup shell, full setup shows `Apply Basis / Start Modeling`, Apply hides the setup window and ribbon setup pill, startup canvas stays clean, and no console errors or page-level horizontal overflow were observed. About screenshots: `docs/ux_ui_final_smoke_about_desktop.png`, `docs/ux_ui_final_smoke_about_tablet-landscape.png`, `docs/ux_ui_final_smoke_about_mobile.png`. Post-apply screenshots: `docs/ux_ui_final_smoke_desktop.png`, `docs/ux_ui_final_smoke_tablet-landscape.png`, `docs/ux_ui_final_smoke_mobile.png`.
+- Batch 25 static verification locked the mobile pump live-panel width and label/value/unit overlap protection.
+- Batch 26 static verification and reusable browser smoke locked the hidden `Objects` ribbon button while preserving the compact horizontal object palette.
+- Batch 27 static verification and reusable browser smoke locked the compact no-logo academic identity to the right of `Solve` on small ribbons.
+- Batch 28 static verification and reusable browser smoke locked the compact no-logo academic identity on the same row as `Solve` at iPhone SE 375 x 667.
+- Batch 29 static verification and reusable browser smoke locked the compact landscape menu bar as visible at iPhone SE 667 x 375.
+- Final viewport smoke confirmed the thesis startup and first-run basis flow on desktop, tablet landscape, iPhone SE portrait, iPhone SE landscape, and mobile: the Help > About dialog is mandatory-visible on browser open, the startup Fluid Basis shell remains available behind it with `Open Setup`, closing About does not minimize the setup shell, full setup shows `Apply Basis / Start Modeling`, Apply hides the setup window and ribbon setup pill, startup canvas stays clean, and no console errors or page-level horizontal overflow were observed. About screenshots: `docs/ux_ui_final_smoke_about_desktop.png`, `docs/ux_ui_final_smoke_about_tablet-landscape.png`, `docs/ux_ui_final_smoke_about_iphone-se.png`, `docs/ux_ui_final_smoke_about_iphone-se-landscape.png`, `docs/ux_ui_final_smoke_about_mobile.png`. Post-apply screenshots: `docs/ux_ui_final_smoke_desktop.png`, `docs/ux_ui_final_smoke_tablet-landscape.png`, `docs/ux_ui_final_smoke_iphone-se.png`, `docs/ux_ui_final_smoke_iphone-se-landscape.png`, `docs/ux_ui_final_smoke_mobile.png`.
 - The final first-run basis smoke can be rerun with `node tools/smoke-first-run-basis-flow.cjs` from the project root. The tool uses `http://127.0.0.1:4173/` by default, starts the preview server if needed, and rewrites the three final viewport screenshots.
 
 ## 9. Final Audit Status
 
-Audit complete, with practical UX/UI fixes applied and verified through Batch 24. The original findings are retained for traceability, and their status lines now identify the resolving batch or later product-decision supersession. Latest automated verification: context-menu-first connection workflow is locked in `tests/connection-workflow-discoverability.cjs`; selected-object action-panel removal is locked in `tests/canvas-selection-actions.cjs`; mobile object palette visibility and horizontal scroll are locked in `tests/toolbar-object-overflow.cjs`, `tests/toolbar-responsive-accessibility.cjs`, and `tools/smoke-first-run-basis-flow.cjs`; canvas pan-hint removal is locked in `tests/canvas-pan-affordance.cjs`; desktop thesis identity readability is locked in `tests/academic-identity-layout.cjs` and `tools/smoke-first-run-basis-flow.cjs`; exact desktop thesis identity wording and line breaks are locked in `tests/academic-identity-layout.cjs` and `tools/smoke-first-run-basis-flow.cjs`; task-window focus-return coverage is included in `tests/task-window-dock.cjs` and `tests/keyboard-navigation-accessibility.cjs`; the full `.cjs` suite passed after Batch 24.
+Audit complete, with practical UX/UI fixes applied and verified through Batch 29. The original findings are retained for traceability, and their status lines now identify the resolving batch or later product-decision supersession. Latest automated verification: context-menu-first connection workflow is locked in `tests/connection-workflow-discoverability.cjs`; selected-object action-panel removal is locked in `tests/canvas-selection-actions.cjs`; mobile object palette visibility, horizontal scroll, hidden `Objects` ribbon button, compact academic identity beside `Solve`, iPhone SE same-row compact identity behavior, and iPhone SE landscape menu bar visibility are locked in `tests/toolbar-object-overflow.cjs`, `tests/toolbar-responsive-accessibility.cjs`, `tests/academic-identity-layout.cjs`, and `tools/smoke-first-run-basis-flow.cjs`; canvas pan-hint removal is locked in `tests/canvas-pan-affordance.cjs`; desktop thesis identity readability is locked in `tests/academic-identity-layout.cjs` and `tools/smoke-first-run-basis-flow.cjs`; exact desktop thesis identity wording and line breaks are locked in `tests/academic-identity-layout.cjs` and `tools/smoke-first-run-basis-flow.cjs`; mobile pump live-panel readability is locked in `tests/pump-live-parameter-panel.cjs`; task-window focus-return coverage is included in `tests/task-window-dock.cjs` and `tests/keyboard-navigation-accessibility.cjs`; the full `.cjs` suite passed after Batch 29.

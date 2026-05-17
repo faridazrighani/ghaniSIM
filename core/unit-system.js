@@ -34,6 +34,7 @@ const QUANTITY_REGISTRY = {
     power: { baseUnit: 'kW', family: 'power' },
     volume: { baseUnit: 'm3', family: 'volume' },
     area: { baseUnit: 'm2', family: 'area' },
+    levelRate: { baseUnit: 'm/h', family: 'levelRate' },
     percent: { baseUnit: '%', family: 'dimensionless' },
     dimensionless: { baseUnit: '', family: 'dimensionless' }
 };
@@ -63,6 +64,7 @@ const UNIT_PROFILES = {
         power: 'kW',
         volume: 'm3',
         area: 'm2',
+        levelRate: 'm/h',
         pipeSizeBasis: 'DN/NPS'
     },
     [UNIT_STANDARD_SI]: {
@@ -89,6 +91,7 @@ const UNIT_PROFILES = {
         power: 'kW',
         volume: 'm3',
         area: 'm2',
+        levelRate: 'm/s',
         pipeSizeBasis: 'DN'
     },
     [UNIT_STANDARD_US]: {
@@ -115,6 +118,7 @@ const UNIT_PROFILES = {
         power: 'hp',
         volume: 'ft3',
         area: 'ft2',
+        levelRate: 'ft/h',
         pipeSizeBasis: 'NPS'
     }
 };
@@ -131,6 +135,11 @@ function createDefaultSimulationSettings(overrides = {}) {
             lastConfirmedTemperature: null,
             lastConfirmedUnitStandard: DEFAULT_UNIT_STANDARD,
             migratedFromLegacy: false,
+            dynamicStepSeconds: 60,
+            dynamicRealtimeIntervalMs: 60000,
+            dynamicSimulationTimeSeconds: 0,
+            dynamicInventoryEnabled: false,
+            lastDynamicStepStatus: 'Not started',
             ...overrides
         }
     };
@@ -315,6 +324,10 @@ function convertToDisplay(value, quantity, options = {}) {
             return profile.volume === 'ft3' ? numeric * 35.31466672 : numeric;
         case 'area':
             return profile.area === 'ft2' ? numeric * 10.76391042 : numeric;
+        case 'levelRate':
+            if (profile.levelRate === 'm/s') return numeric / 3600;
+            if (profile.levelRate === 'ft/h') return numeric * 3.280839895;
+            return numeric;
         default:
             return numeric;
     }
@@ -373,6 +386,10 @@ function convertFromDisplay(value, quantity, options = {}) {
             return profile.volume === 'ft3' ? numeric / 35.31466672 : numeric;
         case 'area':
             return profile.area === 'ft2' ? numeric / 10.76391042 : numeric;
+        case 'levelRate':
+            if (profile.levelRate === 'm/s') return numeric * 3600;
+            if (profile.levelRate === 'ft/h') return numeric / 3.280839895;
+            return numeric;
         default:
             return numeric;
     }
@@ -420,6 +437,7 @@ function inferQuantityFromProperty(nodeType = '', key = '', label = '', unit = '
     }
     if (text.includes('mass flow') || normalizedUnit === 'kg/h' || normalizedUnit === 'kg/s' || normalizedUnit === 'lb/h') return 'massFlow';
     if (text.includes('power') || normalizedUnit === 'kw' || normalizedUnit === 'hp') return 'power';
+    if (text.includes('level rate') || normalizedUnit === 'm/h' || normalizedUnit === 'm/s' || normalizedUnit === 'ft/h') return 'levelRate';
     if (text.includes('diameter') || k === 'diameter') return 'diameter';
     if (text.includes('roughness') || k === 'roughness') return 'roughness';
     if (text.includes('area') || normalizedUnit === 'm2' || normalizedUnit === 'ft2') return 'area';
@@ -571,6 +589,7 @@ function refreshUnitStandardDependentUi() {
     if (typeof activeChartPumpId !== 'undefined' && activeChartPumpId && typeof updatePumpChart === 'function') {
         updatePumpChart(activeChartPumpId);
     }
+    if (typeof updateAllLevelControllerTrendCharts === 'function') updateAllLevelControllerTrendCharts();
     if (typeof drawConnections === 'function') drawConnections();
     if (typeof currentSelectedNode !== 'undefined' && currentSelectedNode && typeof renderSidebar === 'function') {
         renderSidebar(currentSelectedNode);

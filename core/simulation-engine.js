@@ -1,3 +1,137 @@
+const LEVEL_CONTROLLER_TREND_HISTORY_LIMIT = 80;
+const DYNAMIC_INVENTORY_DEFAULT_STEP_SECONDS = 60;
+const DYNAMIC_INVENTORY_DEFAULT_REALTIME_INTERVAL_MS = 60000;
+const DYNAMIC_INVENTORY_STEP_OPTIONS = [5, 60, 300, 600];
+const DYNAMIC_INVENTORY_REALTIME_INTERVAL_OPTIONS = [5000, 30000, 60000];
+let levelControllerTrendSampleIndex = 0;
+let suppressLevelControllerTrendRecording = false;
+
+function toFiniteTrendNumber(value) {
+    const numeric = parseFloat(value);
+    return Number.isFinite(numeric) ? numeric : null;
+}
+
+function sanitizeLevelControllerTrendSample(sample, fallbackIndex = 1) {
+    if (!sample || typeof sample !== 'object') return null;
+    const level = toFiniteTrendNumber(sample.level);
+    if (level === null) return null;
+    const index = toFiniteTrendNumber(sample.index);
+    const timestamp = toFiniteTrendNumber(sample.timestamp);
+    const trendText = typeof sample.trend === 'string' && sample.trend.length <= 40
+        ? sample.trend
+        : '-';
+    const targetId = typeof sample.targetId === 'string'
+        ? sample.targetId.slice(0, 80)
+        : '';
+
+    return {
+        index: index === null ? fallbackIndex : index,
+        timestamp: timestamp === null ? null : timestamp,
+        targetId,
+        level,
+        setPointLevel: toFiniteTrendNumber(sample.setPointLevel),
+        levelPercent: toFiniteTrendNumber(sample.levelPercent),
+        hll: toFiniteTrendNumber(sample.hll),
+        nll: toFiniteTrendNumber(sample.nll),
+        lll: toFiniteTrendNumber(sample.lll),
+        netFlow: toFiniteTrendNumber(sample.netFlow),
+        levelRate: toFiniteTrendNumber(sample.levelRate),
+        simulationTimeSeconds: toFiniteTrendNumber(sample.simulationTimeSeconds),
+        trend: trendText
+    };
+}
+
+function sanitizeLevelControllerTrendHistory(history = []) {
+    if (!Array.isArray(history)) return [];
+    const sanitized = [];
+    history.slice(-LEVEL_CONTROLLER_TREND_HISTORY_LIMIT).forEach(sample => {
+        const item = sanitizeLevelControllerTrendSample(sample, sanitized.length + 1);
+        if (item) sanitized.push(item);
+    });
+    return sanitized;
+}
+
+function syncLevelControllerTrendSampleIndex(history = []) {
+    const maxIndex = history.reduce((max, sample) => {
+        const index = toFiniteTrendNumber(sample?.index);
+        return index === null ? max : Math.max(max, index);
+    }, 0);
+    if (maxIndex > levelControllerTrendSampleIndex) {
+        levelControllerTrendSampleIndex = maxIndex;
+    }
+}
+
+function normalizeLevelControllerTrendView(view = {}, historyLength = 0) {
+    const hasHistory = historyLength > 0;
+    const rawIndex = toFiniteTrendNumber(view?.sampleIndex);
+    const sampleIndex = hasHistory
+        ? Math.min(Math.max(Math.round(rawIndex === null ? historyLength : rawIndex), 1), historyLength)
+        : 0;
+    return {
+        mode: hasHistory && view?.mode === 'rewind' ? 'rewind' : 'live',
+        sampleIndex
+    };
+}
+
+function normalizeAllLevelControllerTrendHistoriesForSave(model = (typeof globalModel !== 'undefined' ? globalModel : {})) {
+    Object.keys(model || {}).forEach(nodeId => {
+        const instrument = model[nodeId];
+        if (!instrument || instrument.type !== 'levelController') return;
+        if (!instrument.results) instrument.results = {};
+        const history = sanitizeLevelControllerTrendHistory(instrument.results.levelTrendHistory);
+        instrument.results.levelTrendHistory = history;
+        instrument.results.levelTrendView = normalizeLevelControllerTrendView(
+            instrument.results.levelTrendView,
+            history.length
+        );
+        syncLevelControllerTrendSampleIndex(history);
+    });
+    return model;
+}
+
+function restoreLevelControllerTrendState(model = (typeof globalModel !== 'undefined' ? globalModel : {})) {
+    return normalizeAllLevelControllerTrendHistoriesForSave(model);
+}
+
+function recordLevelControllerTrendSample(instrument, values = {}) {
+    if (!instrument || instrument.type !== 'levelController') return;
+    if (suppressLevelControllerTrendRecording) return;
+    if (!instrument.results) instrument.results = {};
+
+    const targetId = values.targetId || instrument.props?.attachedTo || '';
+    const level = toFiniteTrendNumber(values.level);
+    if (!targetId || level === null) {
+        instrument.results.levelTrendStatus = 'Waiting for tank/vessel level attachment';
+        return;
+    }
+
+    const history = sanitizeLevelControllerTrendHistory(instrument.results.levelTrendHistory)
+        .slice(-LEVEL_CONTROLLER_TREND_HISTORY_LIMIT + 1);
+    syncLevelControllerTrendSampleIndex(history);
+    const sampleIndex = ++levelControllerTrendSampleIndex;
+    history.push({
+        index: sampleIndex,
+        timestamp: typeof Date !== 'undefined' && Date.now ? Date.now() : sampleIndex,
+        targetId,
+        level,
+        setPointLevel: toFiniteTrendNumber(values.setPointLevel),
+        levelPercent: toFiniteTrendNumber(values.levelPercent),
+        hll: toFiniteTrendNumber(values.hll),
+        nll: toFiniteTrendNumber(values.nll),
+        lll: toFiniteTrendNumber(values.lll),
+        netFlow: toFiniteTrendNumber(values.netFlow),
+        levelRate: toFiniteTrendNumber(values.levelRate),
+        simulationTimeSeconds: toFiniteTrendNumber(values.simulationTimeSeconds),
+        trend: values.levelTrend || '-'
+    });
+
+    instrument.results.levelTrendHistory = history;
+    const trendView = normalizeLevelControllerTrendView(instrument.results.levelTrendView, history.length);
+    if (trendView.mode === 'live') trendView.sampleIndex = history.length;
+    instrument.results.levelTrendView = trendView;
+    instrument.results.levelTrendStatus = `${values.levelTrend || '-'} level; ${history.length} sample${history.length === 1 ? '' : 's'}`;
+}
+
 function updatePumpResultReadouts(pump) {
     const statusClass = typeof getPumpEvaluationStatusClass === 'function'
         ? getPumpEvaluationStatusClass(pump.results.cavitationStatus || pump.results.status)
@@ -425,8 +559,17 @@ function updateInstrumentReadout(instrumentId) {
             const values = readout.values || {};
             instrument.props.measuredLevel = values.level ?? null;
             instrument.props.measuredLevelPercent = values.levelPercent ?? readout.percent ?? null;
+            instrument.props.setPointLevel = values.setPointLevel ?? null;
             instrument.props.controllerError = values.controllerError ?? null;
             instrument.props.controllerOutput = values.controllerOutput ?? null;
+            instrument.props.tankNetFlow = values.netFlow ?? null;
+            instrument.props.tankLevelTrend = values.levelTrend ?? null;
+            instrument.props.tankLevelRate = values.levelRate ?? null;
+            instrument.props.requiredOutletFlow = values.requiredOutletFlow ?? null;
+            values.simulationTimeSeconds = typeof getDynamicInventorySettings === 'function'
+                ? getDynamicInventorySettings().dynamicSimulationTimeSeconds
+                : null;
+            recordLevelControllerTrendSample(instrument, values);
         }
     }
 
@@ -446,8 +589,13 @@ function updateInstrumentReadout(instrumentId) {
         } else if (instrument.type === 'levelController') {
             setSidebarReadout('instrument-measured-level', instrument.props.measuredLevel, 'm');
             setSidebarReadout('instrument-measured', readout.value, readout.unit);
+            setSidebarReadout('instrument-setpoint-level', instrument.props.setPointLevel, 'm');
             setSidebarReadout('instrument-signal', instrument.props.controllerOutput ?? readout.percent, '%');
             setSidebarReadout('instrument-controller-error', instrument.props.controllerError, '%');
+            setSidebarReadout('instrument-tank-net-flow', instrument.props.tankNetFlow, 'm3/h');
+            setSidebarReadout('instrument-tank-level-trend', instrument.props.tankLevelTrend, '');
+            setSidebarReadout('instrument-tank-level-rate', instrument.props.tankLevelRate, 'm/h');
+            setSidebarReadout('instrument-required-outlet-flow', instrument.props.requiredOutletFlow, 'm3/h');
         } else {
             setSidebarReadout('instrument-measured', readout.value, readout.unit);
             setSidebarReadout('instrument-signal', readout.percent, readout.percent === null ? '' : '%');
@@ -456,6 +604,12 @@ function updateInstrumentReadout(instrumentId) {
 
     if (typeof updateInstrumentCalculationTraceReadout === 'function') {
         updateInstrumentCalculationTraceReadout(instrumentId);
+    }
+    if (instrument.type === 'levelController' && typeof updateLevelControllerTrendChart === 'function') {
+        updateLevelControllerTrendChart(instrumentId);
+    }
+    if (instrument.type === 'levelController' && typeof updateObjectOperatingStatusVisual === 'function') {
+        updateObjectOperatingStatusVisual(instrumentId);
     }
 }
 
@@ -535,14 +689,45 @@ function getTankSourceFeedLinks(tankId) {
     return sourceLinks.filter(link => link.targetId === tankId && globalModel[link.sourceId]?.type === 'source');
 }
 
+function getSourceDynamicContributionMode(source) {
+    const continuous = typeof SOURCE_DYNAMIC_CONTRIBUTION_CONTINUOUS !== 'undefined'
+        ? SOURCE_DYNAMIC_CONTRIBUTION_CONTINUOUS
+        : 'Continuous Feed to Tank';
+    const initialOnly = typeof SOURCE_DYNAMIC_CONTRIBUTION_INITIAL_ONLY !== 'undefined'
+        ? SOURCE_DYNAMIC_CONTRIBUTION_INITIAL_ONLY
+        : 'Initial Inventory Only';
+    const inactive = typeof SOURCE_DYNAMIC_CONTRIBUTION_INACTIVE !== 'undefined'
+        ? SOURCE_DYNAMIC_CONTRIBUTION_INACTIVE
+        : 'Inactive';
+    const options = typeof SOURCE_DYNAMIC_CONTRIBUTION_OPTIONS !== 'undefined'
+        ? SOURCE_DYNAMIC_CONTRIBUTION_OPTIONS
+        : [continuous, initialOnly, inactive];
+    const mode = source?.props?.dynamicContributionMode;
+    return options.includes(mode) ? mode : continuous;
+}
+
+function getSourceDynamicContributionFlow(source, steadyFlow) {
+    const flow = parseFloat(steadyFlow);
+    if (!Number.isFinite(flow)) return null;
+    return getSourceDynamicContributionMode(source) === (typeof SOURCE_DYNAMIC_CONTRIBUTION_CONTINUOUS !== 'undefined'
+        ? SOURCE_DYNAMIC_CONTRIBUTION_CONTINUOUS
+        : 'Continuous Feed to Tank')
+        ? Number(flow.toFixed(3))
+        : 0;
+}
+
 function getTankSourceFeedFlowBreakdown(tankId) {
     return getTankSourceFeedLinks(tankId).reduce((sum, link) => {
         const source = globalModel[link.sourceId];
+        if (typeof normalizeSourceProps === 'function') normalizeSourceProps(source);
         const flow = parseFloat(source?.props?.flow);
+        const dynamicContributionMode = getSourceDynamicContributionMode(source);
         sum.push({
             sourceId: link.sourceId,
             sourceType: source?.props?.sourceType || '-',
-            flow: Number.isFinite(flow) ? Number(flow.toFixed(3)) : null
+            flow: Number.isFinite(flow) ? Number(flow.toFixed(3)) : null,
+            dynamicContributionMode,
+            dynamicFlow: getSourceDynamicContributionFlow(source, flow)
         });
         return sum;
     }, []);
@@ -551,6 +736,12 @@ function getTankSourceFeedFlowBreakdown(tankId) {
 function getTankSourceFeedFlowTotal(sourceFeedFlows) {
     return (sourceFeedFlows || []).reduce((sum, row) => (
         sum + (Number.isFinite(row?.flow) ? row.flow : 0)
+    ), 0);
+}
+
+function getTankDynamicSourceFeedFlowTotal(sourceFeedFlows) {
+    return (sourceFeedFlows || []).reduce((sum, row) => (
+        sum + (Number.isFinite(row?.dynamicFlow) ? row.dynamicFlow : 0)
     ), 0);
 }
 
@@ -572,10 +763,239 @@ function formatSignedTankFlow(flow) {
     return `${sign}${flow.toFixed(3)}`;
 }
 
-function getTankInventoryAdvisory(netFlow, levelTrend) {
+function getTankLevelRate(netFlow, tank) {
+    const diameter = parseFloat(tank?.props?.diameter);
+    const tankArea = Number.isFinite(diameter) && diameter > 0
+        ? (Math.PI / 4) * Math.pow(diameter, 2)
+        : null;
+    if (!Number.isFinite(netFlow) || !Number.isFinite(tankArea) || tankArea <= 0) return null;
+    return netFlow / tankArea;
+}
+
+function getDynamicInventorySettings() {
+    const settings = typeof ensureSimulationSettings === 'function'
+        ? ensureSimulationSettings()
+        : null;
+    const props = settings?.props || {};
+    const stepSeconds = parseFloat(props.dynamicStepSeconds);
+    const realtimeIntervalMs = parseFloat(props.dynamicRealtimeIntervalMs);
+    const simulationTimeSeconds = parseFloat(props.dynamicSimulationTimeSeconds);
+    props.dynamicStepSeconds = DYNAMIC_INVENTORY_STEP_OPTIONS.includes(stepSeconds)
+        ? stepSeconds
+        : DYNAMIC_INVENTORY_DEFAULT_STEP_SECONDS;
+    props.dynamicRealtimeIntervalMs = DYNAMIC_INVENTORY_REALTIME_INTERVAL_OPTIONS.includes(realtimeIntervalMs)
+        ? realtimeIntervalMs
+        : DYNAMIC_INVENTORY_DEFAULT_REALTIME_INTERVAL_MS;
+    props.dynamicSimulationTimeSeconds = Number.isFinite(simulationTimeSeconds) && simulationTimeSeconds >= 0
+        ? simulationTimeSeconds
+        : 0;
+    if (props.dynamicInventoryEnabled === undefined) props.dynamicInventoryEnabled = false;
+    if (!props.lastDynamicStepStatus) props.lastDynamicStepStatus = 'Not started';
+    return props;
+}
+
+function setDynamicInventoryStepSeconds(stepSeconds) {
+    const settings = getDynamicInventorySettings();
+    const parsed = parseInt(stepSeconds, 10);
+    if (!DYNAMIC_INVENTORY_STEP_OPTIONS.includes(parsed)) return settings.dynamicStepSeconds;
+    settings.dynamicStepSeconds = parsed;
+    return settings.dynamicStepSeconds;
+}
+
+function setDynamicInventoryRealtimeIntervalMs(intervalMs) {
+    const settings = getDynamicInventorySettings();
+    const parsed = parseInt(intervalMs, 10);
+    if (!DYNAMIC_INVENTORY_REALTIME_INTERVAL_OPTIONS.includes(parsed)) return settings.dynamicRealtimeIntervalMs;
+    settings.dynamicRealtimeIntervalMs = parsed;
+    return settings.dynamicRealtimeIntervalMs;
+}
+
+function formatDynamicInventoryDuration(seconds) {
+    const totalSeconds = Math.max(0, Math.round(parseFloat(seconds) || 0));
+    if (totalSeconds === 0) return '0 s';
+    if (totalSeconds % 3600 === 0) return `${totalSeconds / 3600} h`;
+    if (totalSeconds % 60 === 0) return `${totalSeconds / 60} min`;
+    return `${totalSeconds} s`;
+}
+
+function formatDynamicInventoryClock(seconds) {
+    const totalSeconds = Math.max(0, Math.round(parseFloat(seconds) || 0));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    return [hours, minutes, secs].map(value => String(value).padStart(2, '0')).join(':');
+}
+
+function roundDynamicInventoryValue(value, digits = 3) {
+    const numeric = parseFloat(value);
+    return Number.isFinite(numeric) ? Number(numeric.toFixed(digits)) : null;
+}
+
+function getDynamicInventoryTankArea(tank) {
+    const diameter = parseFloat(tank?.props?.diameter);
+    return Number.isFinite(diameter) && diameter > 0
+        ? (Math.PI / 4) * Math.pow(diameter, 2)
+        : null;
+}
+
+function getTankDynamicLimitWarnings(tankId, oldLevel, newLevel, unclampedLevel, tankHeight, tank = {}) {
+    const warnings = [];
+    const hll = parseFloat(tank.props?.hll);
+    const lll = parseFloat(tank.props?.lll);
+    if (Number.isFinite(tankHeight) && tankHeight > 0 && unclampedLevel > tankHeight) {
+        warnings.push(`${tankId} reached tank height; dynamic inventory step was clamped to prevent overflow.`);
+    }
+    if (unclampedLevel < 0) {
+        warnings.push(`${tankId} reached empty level; dynamic inventory step was clamped at 0 m.`);
+    }
+    if (Number.isFinite(hll) && oldLevel < hll && newLevel >= hll) {
+        warnings.push(`${tankId} crossed HLL during dynamic inventory step.`);
+    }
+    if (Number.isFinite(lll) && oldLevel > lll && newLevel <= lll) {
+        warnings.push(`${tankId} crossed LLL during dynamic inventory step.`);
+    }
+    return warnings;
+}
+
+function applyTankDynamicInventoryStep(tankId, stepSeconds = DYNAMIC_INVENTORY_DEFAULT_STEP_SECONDS, options = {}) {
+    const tank = typeof globalModel !== 'undefined' ? globalModel[tankId] : null;
+    if (!tank || tank.type !== 'tank') return null;
+    if (typeof normalizeTankProps === 'function') normalizeTankProps(tank);
+    if (typeof ensureNodeResults === 'function') ensureNodeResults(tank);
+
+    const dynamicNetFlow = parseFloat(tank.results?.dynamicNetFlow);
+    const steadyNetFlow = parseFloat(tank.results?.netFlow);
+    const netFlow = Number.isFinite(dynamicNetFlow) ? dynamicNetFlow : steadyNetFlow;
+    const netFlowBasis = Number.isFinite(dynamicNetFlow) ? 'Dynamic Net Flow' : 'Steady Net Flow';
+    const tankArea = getDynamicInventoryTankArea(tank);
+    const oldLevel = parseFloat(tank.props?.liquidLevel);
+    const tankHeight = parseFloat(tank.props?.tankHeight);
+    const dtSeconds = parseFloat(stepSeconds);
+    const dtHours = Number.isFinite(dtSeconds) && dtSeconds > 0 ? dtSeconds / 3600 : null;
+
+    if (!Number.isFinite(netFlow) || !Number.isFinite(tankArea) || tankArea <= 0 || !Number.isFinite(oldLevel) || !dtHours) {
+        const skipped = {
+            tankId,
+            status: 'Skipped',
+            message: `${tankId} has no valid net flow, tank area, current level, or timestep for dynamic inventory.`,
+            netFlow: Number.isFinite(netFlow) ? roundDynamicInventoryValue(netFlow, 3) : null,
+            netFlowBasis,
+            stepSeconds: Number.isFinite(dtSeconds) ? dtSeconds : stepSeconds
+        };
+        tank.results.dynamicInventory = skipped;
+        return skipped;
+    }
+
+    const requestedDeltaVolume = netFlow * dtHours;
+    const requestedDeltaLevel = requestedDeltaVolume / tankArea;
+    const unclampedLevel = oldLevel + requestedDeltaLevel;
+    const hasHeightLimit = Number.isFinite(tankHeight) && tankHeight > 0;
+    const newLevel = hasHeightLimit
+        ? Math.min(Math.max(unclampedLevel, 0), tankHeight)
+        : Math.max(unclampedLevel, 0);
+    const actualDeltaLevel = newLevel - oldLevel;
+    const oldVolume = typeof calculateTankLiquidVolume === 'function'
+        ? calculateTankLiquidVolume(parseFloat(tank.props?.diameter), oldLevel)
+        : tankArea * oldLevel;
+    const newVolume = typeof calculateTankLiquidVolume === 'function'
+        ? calculateTankLiquidVolume(parseFloat(tank.props?.diameter), newLevel)
+        : tankArea * newLevel;
+    const actualDeltaVolume = newVolume - oldVolume;
+    const warnings = getTankDynamicLimitWarnings(tankId, oldLevel, newLevel, unclampedLevel, tankHeight, tank);
+    const levelTolerance = 1e-9;
+    const status = Math.abs(actualDeltaLevel) <= levelTolerance
+        ? 'Balanced'
+        : (actualDeltaLevel > 0 ? 'Rising' : 'Falling');
+    const simulationTimeSeconds = parseFloat(options.simulationTimeSeconds);
+
+    tank.props.liquidLevel = roundDynamicInventoryValue(newLevel, 3);
+    if (typeof refreshTankInventoryCalculations === 'function') {
+        refreshTankInventoryCalculations(tank.props);
+    }
+
+    const summary = {
+        tankId,
+        status,
+        stepSeconds: dtSeconds,
+        dtHours: roundDynamicInventoryValue(dtHours, 6),
+        netFlow: roundDynamicInventoryValue(netFlow, 3),
+        netFlowBasis,
+        tankArea: roundDynamicInventoryValue(tankArea, 3),
+        previousLevel: roundDynamicInventoryValue(oldLevel, 3),
+        newLevel: roundDynamicInventoryValue(tank.props.liquidLevel, 3),
+        requestedDeltaLevel: roundDynamicInventoryValue(requestedDeltaLevel, 6),
+        actualDeltaLevel: roundDynamicInventoryValue(actualDeltaLevel, 6),
+        previousVolume: roundDynamicInventoryValue(oldVolume, 3),
+        newVolume: roundDynamicInventoryValue(newVolume, 3),
+        requestedDeltaVolume: roundDynamicInventoryValue(requestedDeltaVolume, 3),
+        actualDeltaVolume: roundDynamicInventoryValue(actualDeltaVolume, 3),
+        fillPercent: roundDynamicInventoryValue(tank.props.fillPercent, 3),
+        simulationTimeSeconds: Number.isFinite(simulationTimeSeconds) ? simulationTimeSeconds : null,
+        warnings
+    };
+    tank.results.dynamicInventory = summary;
+    return summary;
+}
+
+function runSuppressedTrendSolveForDynamicStep() {
+    if (typeof updateSimulation !== 'function') return;
+    const previousTrendSuppression = suppressLevelControllerTrendRecording;
+    suppressLevelControllerTrendRecording = true;
+    try {
+        updateSimulation({ renderSidebarAfter: false });
+    } finally {
+        suppressLevelControllerTrendRecording = previousTrendSuppression;
+    }
+}
+
+function stepDynamicTankInventory(options = {}) {
+    const settings = getDynamicInventorySettings();
+    const stepSeconds = options.stepSeconds === undefined
+        ? settings.dynamicStepSeconds
+        : setDynamicInventoryStepSeconds(options.stepSeconds);
+
+    if (options.preSolve !== false) {
+        runSuppressedTrendSolveForDynamicStep();
+    }
+
+    const tankIds = Object.keys(globalModel || {}).filter(nodeId => globalModel[nodeId]?.type === 'tank');
+    const nextSimulationTime = settings.dynamicSimulationTimeSeconds + stepSeconds;
+    const tankSummaries = tankIds
+        .map(tankId => applyTankDynamicInventoryStep(tankId, stepSeconds, {
+            simulationTimeSeconds: nextSimulationTime
+        }))
+        .filter(Boolean);
+    const changedTanks = tankSummaries.filter(item => item.status !== 'Skipped' && Math.abs(item.actualDeltaLevel || 0) > 1e-9);
+    const warnings = tankSummaries.flatMap(item => item.warnings || []);
+
+    if (changedTanks.length > 0) {
+        settings.dynamicSimulationTimeSeconds = nextSimulationTime;
+        settings.dynamicInventoryEnabled = true;
+        settings.lastDynamicStepStatus = `${changedTanks.length} tank${changedTanks.length === 1 ? '' : 's'} updated at t=${formatDynamicInventoryClock(settings.dynamicSimulationTimeSeconds)}`;
+    } else {
+        settings.lastDynamicStepStatus = 'No tank level changed; check net flow and tank geometry.';
+    }
+
+    if (typeof updateSimulation === 'function') {
+        updateSimulation({ renderSidebarAfter: options.renderSidebarAfter !== false });
+    }
+
+    return {
+        ok: changedTanks.length > 0,
+        stepSeconds,
+        simulationTimeSeconds: settings.dynamicSimulationTimeSeconds,
+        tankSummaries,
+        changedTanks,
+        warnings,
+        status: settings.lastDynamicStepStatus
+    };
+}
+
+function getTankInventoryAdvisory(netFlow, levelTrend, levelRate = null, flowLabel = 'Net Flow') {
     if (!Number.isFinite(netFlow) || !['Rising', 'Falling'].includes(levelTrend)) return '';
     const direction = levelTrend === 'Rising' ? 'rise' : 'fall';
-    return `Tank inventory advisory: Net Flow = ${formatSignedTankFlow(netFlow)} m3/h; level will ${direction}. Pump/NPSH calculations use the current liquid level until a dynamic level model is solved.`;
+    const rateText = Number.isFinite(levelRate) ? `; level rate = ${formatSignedTankFlow(levelRate)} m/h` : '';
+    return `Tank inventory advisory: ${flowLabel} = ${formatSignedTankFlow(netFlow)} m3/h${rateText}; level will ${direction}. Use Simulate > Step Dynamic Inventory to integrate the tank level and volume over time.`;
 }
 
 function updateTankPressureReadout(tankId) {
@@ -623,12 +1043,20 @@ function updateTankPressureReadout(tankId) {
 
     const sourceFeedFlows = getTankSourceFeedFlowBreakdown(tankId);
     const sourceFeedFlow = getTankSourceFeedFlowTotal(sourceFeedFlows);
+    const dynamicSourceFeedFlow = getTankDynamicSourceFeedFlowTotal(sourceFeedFlows);
     const inletFlow = pipeInletFlow + sourceFeedFlow;
     const outletFlow = pipeOutletFlow;
     const hasFlow = inletFlow > 0 || outletFlow > 0;
     const netFlow = hasFlow ? inletFlow - outletFlow : null;
     const flowTolerance = Math.max(0.01, Math.max(inletFlow, outletFlow) * 0.02);
     const levelTrend = getTankLevelTrend(netFlow, hasFlow, flowTolerance);
+    const levelRate = getTankLevelRate(netFlow, tank);
+    const dynamicInletFlow = pipeInletFlow + dynamicSourceFeedFlow;
+    const hasDynamicFlow = dynamicInletFlow > 0 || outletFlow > 0;
+    const dynamicNetFlow = hasDynamicFlow ? dynamicInletFlow - outletFlow : null;
+    const dynamicFlowTolerance = Math.max(0.01, Math.max(dynamicInletFlow, outletFlow) * 0.02);
+    const dynamicLevelTrend = getTankLevelTrend(dynamicNetFlow, hasDynamicFlow, dynamicFlowTolerance);
+    const dynamicLevelRate = getTankLevelRate(dynamicNetFlow, tank);
 
     let hydraulicStatus = 'No hydraulic connection';
     if (tankConnections.length === 0 && sourceFeedLinks.length > 0) {
@@ -643,6 +1071,12 @@ function updateTankPressureReadout(tankId) {
         ? evaluateTankPressureSafety(tank.props, fluid?.props || {})
         : { status: '-', warnings: [], suggestedPressure: 0, suggestedBasis: 'Not available' };
     const warnings = [...safety.warnings];
+    const dynamicInventory = tank.results.dynamicInventory || null;
+    if (dynamicInventory?.warnings?.length) {
+        dynamicInventory.warnings.forEach(warning => {
+            if (warning && !warnings.includes(warning)) warnings.push(warning);
+        });
+    }
     const advisories = [];
     const operatingPressureAbsolute = typeof getNodeAbsolutePressureBar === 'function'
         ? getNodeAbsolutePressureBar(tank)
@@ -654,7 +1088,7 @@ function updateTankPressureReadout(tankId) {
     if (tankConnections.length > 0 && sidePressures.length === 0) {
         warnings.push('Connected pipe pressure is not solved; connect upstream SRC and downstream SNK to calculate flow.');
     }
-    const inventoryAdvisory = getTankInventoryAdvisory(netFlow, levelTrend);
+    const inventoryAdvisory = getTankInventoryAdvisory(dynamicNetFlow, dynamicLevelTrend, dynamicLevelRate, 'Dynamic Net Flow');
     if (inventoryAdvisory) {
         advisories.push(inventoryAdvisory);
     }
@@ -666,11 +1100,19 @@ function updateTankPressureReadout(tankId) {
     tank.results.inletPressure = inletPressure;
     tank.results.outletPressure = outletPressure;
     tank.results.stagnationPressure = averageFiniteValues(sideStagnationPressures);
+    tank.results.pipeInletFlow = hasFlow ? Number(pipeInletFlow.toFixed(3)) : null;
+    tank.results.pipeOutletFlow = hasFlow ? Number(pipeOutletFlow.toFixed(3)) : null;
     tank.results.inletFlow = hasFlow ? Number(inletFlow.toFixed(3)) : null;
     tank.results.outletFlow = hasFlow ? Number(outletFlow.toFixed(3)) : null;
     tank.results.netFlow = Number.isFinite(netFlow) ? Number(netFlow.toFixed(3)) : null;
     tank.results.levelTrend = levelTrend;
+    tank.results.levelRate = Number.isFinite(levelRate) ? Number(levelRate.toFixed(3)) : null;
     tank.results.sourceFeedFlow = sourceFeedLinks.length > 0 ? Number(sourceFeedFlow.toFixed(3)) : null;
+    tank.results.dynamicSourceFeedFlow = sourceFeedLinks.length > 0 ? Number(dynamicSourceFeedFlow.toFixed(3)) : null;
+    tank.results.dynamicInletFlow = hasDynamicFlow ? Number(dynamicInletFlow.toFixed(3)) : null;
+    tank.results.dynamicNetFlow = Number.isFinite(dynamicNetFlow) ? Number(dynamicNetFlow.toFixed(3)) : null;
+    tank.results.dynamicLevelTrend = dynamicLevelTrend;
+    tank.results.dynamicLevelRate = Number.isFinite(dynamicLevelRate) ? Number(dynamicLevelRate.toFixed(3)) : null;
     tank.results.operatingPressureAbsolute = Number.isFinite(operatingPressureAbsolute) ? Number(operatingPressureAbsolute.toFixed(3)) : null;
     tank.results.operatingPressureGauge = Number.isFinite(operatingPressureGauge) ? Number(operatingPressureGauge.toFixed(3)) : null;
     tank.results.operatingPressureGaugeMbar = Number.isFinite(operatingPressureGauge) ? Number((operatingPressureGauge * 1000).toFixed(3)) : null;
@@ -691,7 +1133,8 @@ function updateTankPressureReadout(tankId) {
     tank.results.geometryStatus = safety.geometryStatus;
     tank.results.emergencyVentProvided = tank.props.emergencyVentProvided;
     tank.results.status = warnings.length ? 'Review' : (advisories.length ? 'Advisory' : hydraulicStatus);
-    tank.results.warnings = [...warnings, ...advisories];
+    tank.results.warnings = warnings;
+    tank.results.advisories = advisories;
     tank.results.calculationTrace = typeof buildTankCalculationTrace === 'function'
         ? buildTankCalculationTrace(tank, fluid?.props || {}, tank.results)
         : null;
@@ -704,11 +1147,18 @@ function updateTankPressureReadout(tankId) {
         setSidebarReadout('tank-inlet-pressure', tank.results.inletPressure === null ? null : Number(tank.results.inletPressure.toFixed(3)), 'bar a');
         setSidebarReadout('tank-outlet-pressure', tank.results.outletPressure === null ? null : Number(tank.results.outletPressure.toFixed(3)), 'bar a');
         setSidebarReadout('tank-stagnation-pressure', tank.results.stagnationPressure === null ? null : Number(tank.results.stagnationPressure.toFixed(3)), 'bar a');
+        setSidebarReadout('tank-pipe-inlet-flow', tank.results.pipeInletFlow, 'm3/h');
+        setSidebarReadout('tank-pipe-outlet-flow', tank.results.pipeOutletFlow, 'm3/h');
         setSidebarReadout('tank-inlet-flow', tank.results.inletFlow, 'm3/h');
         setSidebarReadout('tank-outlet-flow', tank.results.outletFlow, 'm3/h');
         setSidebarReadout('tank-net-flow', tank.results.netFlow, 'm3/h');
         setSidebarReadout('tank-level-trend', tank.results.levelTrend, '');
+        setSidebarReadout('tank-level-rate', tank.results.levelRate, 'm/h');
         setSidebarReadout('tank-source-feed-flow', tank.results.sourceFeedFlow, 'm3/h');
+        setSidebarReadout('tank-dynamic-source-feed-flow', tank.results.dynamicSourceFeedFlow, 'm3/h');
+        setSidebarReadout('tank-dynamic-net-flow', tank.results.dynamicNetFlow, 'm3/h');
+        setSidebarReadout('tank-dynamic-level-trend', tank.results.dynamicLevelTrend, '');
+        setSidebarReadout('tank-dynamic-level-rate', tank.results.dynamicLevelRate, 'm/h');
         if (typeof setTankSourceFeedFlowBreakdownReadout === 'function') {
             setTankSourceFeedFlowBreakdownReadout(tank.results.sourceFeedFlows);
         }
@@ -727,6 +1177,7 @@ function updateTankPressureReadout(tankId) {
         setSidebarReadout('tank-geometry-status', tank.results.geometryStatus, '');
         setSidebarReadout('tank-status', tank.results.status, '');
         setSidebarReadout('tank-warnings', tank.results.warnings.join(' | ') || 'OK', '');
+        setSidebarReadout('tank-advisories', tank.results.advisories.join(' | ') || '-', '');
     }
     if (typeof updateTankCalculationTraceReadout === 'function') {
         updateTankCalculationTraceReadout(tank);
@@ -1303,16 +1754,16 @@ function updateSimulation(options = {}) {
         refreshPumpUiReadouts(pumpId, pump);
     });
 
-    if (typeof updateAllObjectOperatingStatusVisuals === 'function') {
-        updateAllObjectOperatingStatusVisuals();
-    }
-
-    updateAllInstrumentReadouts();
     updateAllTankReadouts();
     updateAllValveReadouts();
     updateAllHeatExchangerReadouts();
     updateAllSeparatorReadouts();
     updateAllSinkReadouts();
+    updateAllInstrumentReadouts();
+    if (typeof updateAllObjectOperatingStatusVisuals === 'function') {
+        updateAllObjectOperatingStatusVisuals();
+    }
+
     if (typeof updateAllSourceCalculationTraceReadouts === 'function') {
         updateAllSourceCalculationTraceReadouts();
     }

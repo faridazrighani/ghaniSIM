@@ -10,7 +10,12 @@ window.DEFAULT_SIMULATION_STATE = {
                 lastConfirmedFluid: '',
                 lastConfirmedTemperature: null,
                 lastConfirmedUnitStandard: 'Metric / European Engineering',
-                migratedFromLegacy: false
+                migratedFromLegacy: false,
+                dynamicStepSeconds: 60,
+                dynamicRealtimeIntervalMs: 60000,
+                dynamicSimulationTimeSeconds: 0,
+                dynamicInventoryEnabled: false,
+                lastDynamicStepStatus: 'Not started'
             }
         },
         FLUID: {

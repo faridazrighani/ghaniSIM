@@ -243,6 +243,15 @@ function getTankTraceSourceFeedTotal(sourceFeedFlows = []) {
     }, 0);
 }
 
+function getTankTraceDynamicSourceFeedTotal(sourceFeedFlows = []) {
+    return (sourceFeedFlows || []).reduce((sum, row) => {
+        const dynamicFlow = toTankNumber(row?.dynamicFlow, NaN);
+        const steadyFlow = toTankNumber(row?.flow, NaN);
+        const flow = Number.isFinite(dynamicFlow) ? dynamicFlow : steadyFlow;
+        return Number.isFinite(flow) ? sum + flow : sum;
+    }, 0);
+}
+
 function getTankTopElevation(props = {}) {
     return toTankNumber(props.elevation, 0) + toTankNumber(props.tankHeight, 0);
 }
@@ -463,21 +472,45 @@ function buildTankCalculationTrace(tankOrProps = {}, fluidProps = {}, resultsOve
 
     const sourceFeedFlows = Array.isArray(results.sourceFeedFlows) ? results.sourceFeedFlows : [];
     const sourceFeedTotalFromRows = getTankTraceSourceFeedTotal(sourceFeedFlows);
+    const dynamicSourceFeedTotalFromRows = getTankTraceDynamicSourceFeedTotal(sourceFeedFlows);
     const resultSourceFeedFlow = toTankNumber(results.sourceFeedFlow, NaN);
+    const resultDynamicSourceFeedFlow = toTankNumber(results.dynamicSourceFeedFlow, NaN);
     const sourceFeedFlow = Number.isFinite(resultSourceFeedFlow) ? resultSourceFeedFlow : sourceFeedTotalFromRows;
+    const dynamicSourceFeedFlow = Number.isFinite(resultDynamicSourceFeedFlow) ? resultDynamicSourceFeedFlow : dynamicSourceFeedTotalFromRows;
+    const resultPipeInletFlow = toTankNumber(results.pipeInletFlow, NaN);
+    const resultPipeOutletFlow = toTankNumber(results.pipeOutletFlow, NaN);
     const resultInletFlow = toTankNumber(results.inletFlow, NaN);
+    const resultDynamicInletFlow = toTankNumber(results.dynamicInletFlow, NaN);
     const resultOutletFlow = toTankNumber(results.outletFlow, NaN);
-    const pipeInletFlow = Number.isFinite(resultInletFlow)
+    const pipeInletFlow = Number.isFinite(resultPipeInletFlow)
+        ? resultPipeInletFlow
+        : Number.isFinite(resultInletFlow)
         ? Math.max(resultInletFlow - sourceFeedFlow, 0)
         : 0;
     const inletFlow = Number.isFinite(resultInletFlow)
         ? resultInletFlow
         : pipeInletFlow + sourceFeedFlow;
+    const dynamicInletFlow = Number.isFinite(resultDynamicInletFlow)
+        ? resultDynamicInletFlow
+        : pipeInletFlow + dynamicSourceFeedFlow;
     const outletFlow = Number.isFinite(resultOutletFlow) ? resultOutletFlow : 0;
+    const pipeOutletFlow = Number.isFinite(resultPipeOutletFlow) ? resultPipeOutletFlow : outletFlow;
     const resultNetFlow = toTankNumber(results.netFlow, NaN);
+    const resultDynamicNetFlow = toTankNumber(results.dynamicNetFlow, NaN);
     const netFlow = Number.isFinite(resultNetFlow) ? resultNetFlow : inletFlow - outletFlow;
+    const dynamicNetFlow = Number.isFinite(resultDynamicNetFlow) ? resultDynamicNetFlow : dynamicInletFlow - outletFlow;
     const flowTolerance = Math.max(0.01, Math.max(Math.abs(inletFlow), Math.abs(outletFlow)) * 0.02);
+    const dynamicFlowTolerance = Math.max(0.01, Math.max(Math.abs(dynamicInletFlow), Math.abs(outletFlow)) * 0.02);
     const levelTrend = results.levelTrend || (Math.abs(netFlow) <= flowTolerance ? 'Balanced' : (netFlow > 0 ? 'Rising' : 'Falling'));
+    const dynamicLevelTrend = results.dynamicLevelTrend || (Math.abs(dynamicNetFlow) <= dynamicFlowTolerance ? 'Balanced' : (dynamicNetFlow > 0 ? 'Rising' : 'Falling'));
+    const resultLevelRate = toTankNumber(results.levelRate, NaN);
+    const resultDynamicLevelRate = toTankNumber(results.dynamicLevelRate, NaN);
+    const levelRate = Number.isFinite(resultLevelRate)
+        ? resultLevelRate
+        : (Number.isFinite(netFlow) && tankArea > 0 ? netFlow / tankArea : null);
+    const dynamicLevelRate = Number.isFinite(resultDynamicLevelRate)
+        ? resultDynamicLevelRate
+        : (Number.isFinite(dynamicNetFlow) && tankArea > 0 ? dynamicNetFlow / tankArea : null);
 
     const tankDesignPressure = toTankNumber(props.tankDesignPressure, 0);
     const designVacuum = toTankNumber(props.designVacuum, 0);
@@ -570,6 +603,40 @@ function buildTankCalculationTrace(tankOrProps = {}, fluidProps = {}, resultsOve
             unit: 'm3/h'
         },
         {
+            title: 'Dynamic SRC Feed Flow',
+            reference: 'SRC Dynamic Contribution Mode for inventory stepping',
+            formula: 'Qsrc,dyn = sum(Qsrc,i included by dynamic mode)',
+            substitution: (sourceFeedFlows.length
+                ? sourceFeedFlows.map(row => `${row.sourceId || 'SRC'} ${formatTankTraceNumber(row.dynamicFlow ?? row.flow)} m3/h (${row.dynamicContributionMode || 'Continuous Feed to Tank'})`).join(' + ')
+                : 'No attached SRC dynamic feed flows') + ` = ${formatTankTraceNumber(dynamicSourceFeedFlow)} m3/h`,
+            result: roundTankTraceNumber(dynamicSourceFeedFlow, 3),
+            unit: 'm3/h'
+        },
+        {
+            title: 'Dynamic Tank Net Flow',
+            reference: 'Inventory balance used by Step Dynamic Inventory and realtime dynamic inventory',
+            formula: 'Qnet,dyn = Qpipe,in + Qsrc,dyn - Qout',
+            substitution: `${formatTankTraceNumber(pipeInletFlow)} + ${formatTankTraceNumber(dynamicSourceFeedFlow)} - ${formatTankTraceNumber(outletFlow)} = ${formatTankTraceNumber(dynamicNetFlow)} m3/h`,
+            result: roundTankTraceNumber(dynamicNetFlow, 3),
+            unit: 'm3/h'
+        },
+        {
+            title: 'Tank Level Rate',
+            reference: 'Steady inventory trend projection',
+            formula: 'dL/dt = Qnet / A',
+            substitution: `${formatTankTraceNumber(netFlow)} / ${formatTankTraceNumber(tankArea)} = ${formatTankTraceNumber(levelRate)} m/h`,
+            result: roundTankTraceNumber(levelRate, 3),
+            unit: 'm/h'
+        },
+        {
+            title: 'Dynamic Tank Level Rate',
+            reference: 'Level rate used by dynamic inventory integration',
+            formula: 'dL/dt,dyn = Qnet,dyn / A',
+            substitution: `${formatTankTraceNumber(dynamicNetFlow)} / ${formatTankTraceNumber(tankArea)} = ${formatTankTraceNumber(dynamicLevelRate)} m/h`,
+            result: roundTankTraceNumber(dynamicLevelRate, 3),
+            unit: 'm/h'
+        },
+        {
             title: 'Operating Absolute Pressure',
             reference: 'Pressure basis conversion for tank vapor space',
             formula: pressureFormula,
@@ -654,10 +721,17 @@ function buildTankCalculationTrace(tankOrProps = {}, fluidProps = {}, resultsOve
             sourceFeedFlows,
             sourceFeedFlow: roundTankTraceNumber(sourceFeedFlow, 3),
             pipeInletFlow: roundTankTraceNumber(pipeInletFlow, 3),
+            pipeOutletFlow: roundTankTraceNumber(pipeOutletFlow, 3),
             inletFlow: roundTankTraceNumber(inletFlow, 3),
             outletFlow: roundTankTraceNumber(outletFlow, 3),
             netFlow: roundTankTraceNumber(netFlow, 3),
-            levelTrend
+            levelRate: roundTankTraceNumber(levelRate, 3),
+            levelTrend,
+            dynamicSourceFeedFlow: roundTankTraceNumber(dynamicSourceFeedFlow, 3),
+            dynamicInletFlow: roundTankTraceNumber(dynamicInletFlow, 3),
+            dynamicNetFlow: roundTankTraceNumber(dynamicNetFlow, 3),
+            dynamicLevelRate: roundTankTraceNumber(dynamicLevelRate, 3),
+            dynamicLevelTrend
         },
         pressureVenting: {
             operatingPressureAbsolute: roundTankTraceNumber(operatingPressureAbsolute, 3),
@@ -678,7 +752,7 @@ function buildTankCalculationTrace(tankOrProps = {}, fluidProps = {}, resultsOve
         assumptions: [
             'Tank geometry is simplified as a vertical cylindrical shell with flat-bottom volume; strapping tables, roof volume, bottom slope, and dead stock are not modeled.',
             'Liquid level, HLL, NLL, and LLL are heights above tank base; nozzle and transmitter elevations are absolute datum elevations.',
-            'Net flow and level trend are steady readouts. The model does not integrate liquid level dynamically over time.',
+            'Net flow is a steady readout; Dynamic Net Flow applies the SRC Dynamic Contribution Mode before Step Dynamic Inventory or realtime inventory integrates liquid level.',
             'Tank pressure and vent fields are storage tank review parameters, not pressure vessel MAWP/PSV sizing parameters.',
             'API 2000 venting capacity sizing is not calculated; this trace only reviews pressure/vacuum set point consistency.'
         ],
@@ -687,7 +761,8 @@ function buildTankCalculationTrace(tankOrProps = {}, fluidProps = {}, resultsOve
             'API 620 - Design and Construction of Large, Welded, Low-pressure Storage Tanks.',
             'API 2000 - Venting Atmospheric and Low-pressure Storage Tanks; normal/emergency venting basis.',
             'Vertical cylindrical tank volume: V = pi/4 x D^2 x liquid height.',
-            'Steady inventory balance: Qnet = Qin - Qout.'
+            'Steady inventory balance: Qnet = Qin - Qout.',
+            'Dynamic inventory step: L(t + dt) = L(t) + (Qnet,dyn / A) x dt.'
         ]
     };
 }
