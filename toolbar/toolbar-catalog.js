@@ -8,21 +8,19 @@
                 { type: 'tank', label: 'Tank', icon: 'toolbar/icons/tank.svg' },
                 { type: 'separator', label: 'Vessel H', icon: 'toolbar/icons/vessel.svg' },
                 { type: 'verticalVessel', label: 'Vessel V', icon: 'toolbar/icons/vertical-vessel.svg' },
-                { type: 'heatExchanger', label: 'Exchanger', icon: 'toolbar/icons/heat-exchanger.svg' },
-                { type: 'mixer', label: 'Mixer', icon: 'toolbar/icons/mixer.svg' }
+                { type: 'heatExchanger', label: 'Exchanger', icon: 'toolbar/icons/heat-exchanger.svg' }
             ]
         },
         {
             id: 'piping',
             label: 'Piping',
             items: [
-                { type: 'valve', label: 'Valve', icon: 'toolbar/icons/valve.svg' },
-                { type: 'checkValve', label: 'Check', icon: 'toolbar/icons/check-valve.svg' }
+                { type: 'valve', label: 'Valve', icon: 'toolbar/icons/valve.svg' }
             ]
         },
         {
             id: 'pipesim',
-            label: 'PIPESIM',
+            label: 'Boundary',
             items: [
                 { type: 'source', label: 'Source', icon: 'toolbar/icons/source.svg' },
                 { type: 'sink', label: 'Sink', icon: 'toolbar/icons/sink.svg' }

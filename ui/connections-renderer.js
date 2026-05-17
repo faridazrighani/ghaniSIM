@@ -32,6 +32,22 @@ function getObjectCenterPosition(id) {
     };
 }
 
+function getObjectAnchorPosition(id, selector) {
+    const el = getObjectElement(id);
+    if (!el) return null;
+    const anchor = el.querySelector(selector);
+    if (!anchor) return null;
+
+    const rect = anchor.getBoundingClientRect();
+    const canvas = document.getElementById('canvas');
+    const canvasRect = canvas.getBoundingClientRect();
+
+    return {
+        x: rect.left - canvasRect.left + rect.width / 2 + canvas.scrollLeft,
+        y: rect.top - canvasRect.top + rect.height / 2 + canvas.scrollTop
+    };
+}
+
 function buildPipeRoutePoints(p1, p2, routeStyle = 'Straight') {
     if (routeStyle !== 'Elbow') return [p1, p2];
 
@@ -75,6 +91,141 @@ function getRoutePointAtLocation(points, location = 0.5) {
 
 function getRouteMidpoint(points) {
     return getRoutePointAtLocation(points, 0.5);
+}
+
+function getRoutePointAndAngleAtLocation(points, location = 0.5) {
+    let totalLength = 0;
+    for (let i = 1; i < points.length; i += 1) {
+        totalLength += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+    }
+
+    const clampedLocation = Math.max(0, Math.min(1, parseFloat(location)));
+    let targetLength = totalLength * (Number.isFinite(clampedLocation) ? clampedLocation : 0.5);
+    for (let i = 1; i < points.length; i += 1) {
+        const start = points[i - 1];
+        const end = points[i];
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const segmentLength = Math.hypot(dx, dy);
+        if (segmentLength === 0) continue;
+        if (targetLength <= segmentLength || i === points.length - 1) {
+            const t = targetLength <= 0 ? 0 : targetLength / segmentLength;
+            return {
+                x: start.x + dx * Math.max(0, Math.min(1, t)),
+                y: start.y + dy * Math.max(0, Math.min(1, t)),
+                angle: Math.atan2(dy, dx) * 180 / Math.PI
+            };
+        }
+        targetLength -= segmentLength;
+    }
+
+    return { ...(points[0] || { x: 0, y: 0 }), angle: 0 };
+}
+
+function normalizePipeDeltaLabelAngle(angle) {
+    let normalized = Number.isFinite(angle) ? angle : 0;
+    while (normalized > 180) normalized -= 360;
+    while (normalized < -180) normalized += 360;
+    if (normalized > 90) normalized -= 180;
+    if (normalized < -90) normalized += 180;
+    return normalized;
+}
+
+function getPipeDeltaLabelAnchor(points, location = 0.5, offsetPx = 10) {
+    const point = getRoutePointAndAngleAtLocation(points, location);
+    const angle = normalizePipeDeltaLabelAngle(point.angle);
+    const angleRad = angle * Math.PI / 180;
+    return {
+        x: point.x + Math.sin(angleRad) * offsetPx,
+        y: point.y - Math.cos(angleRad) * offsetPx,
+        angle
+    };
+}
+
+function getRouteLength(points = []) {
+    let totalLength = 0;
+    for (let i = 1; i < points.length; i += 1) {
+        totalLength += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+    }
+    return totalLength;
+}
+
+function escapeSvgText(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[char]));
+}
+
+function formatPipePressureLossDisplay(pressureLossBar) {
+    const loss = parseFloat(pressureLossBar);
+    if (!Number.isFinite(loss)) return null;
+    const displayValueRaw = typeof convertToDisplay === 'function'
+        ? convertToDisplay(loss, 'pressureDelta')
+        : loss;
+    const displayUnit = typeof getDisplayUnit === 'function'
+        ? getDisplayUnit('pressureDelta', { pressureBasis: 'delta' })
+        : 'bar';
+    const displayValue = Math.abs(displayValueRaw) < 1e-9 ? 0 : displayValueRaw;
+    const abs = Math.abs(displayValue);
+    const digits = displayUnit === 'kPa'
+        ? (abs >= 100 ? 0 : 1)
+        : (abs >= 10 ? 2 : 3);
+    const formatted = displayValue.toFixed(digits).replace(/\.?0+$/, '');
+    return `${formatted} ${displayUnit}`;
+}
+
+function getPipeDeltaPressureData(pipe) {
+    if (!pipe) return null;
+    const pressureLoss = parseFloat(pipe.results?.pressureDrop);
+    const hasPressureLoss = Number.isFinite(pressureLoss);
+    const displayLoss = hasPressureLoss
+        ? formatPipePressureLossDisplay(Math.max(0, pressureLoss))
+        : '-';
+    const inletPressure = parseFloat(pipe.results?.inletPressure);
+    const outletPressure = parseFloat(pipe.results?.outletPressure);
+    const endpointDelta = Number.isFinite(inletPressure) && Number.isFinite(outletPressure)
+        ? inletPressure - outletPressure
+        : null;
+    return {
+        pressureLoss: hasPressureLoss ? pressureLoss : null,
+        displayText: `ΔP loss ${displayLoss}`,
+        title: [
+            pipe.name || 'Pipe',
+            hasPressureLoss
+                ? `ΔP loss ${Math.max(0, pressureLoss).toFixed(3)} bar`
+                : 'ΔP loss not calculated yet',
+            Number.isFinite(inletPressure) ? `Pin ${inletPressure.toFixed(3)} bar a` : '',
+            Number.isFinite(outletPressure) ? `Pout ${outletPressure.toFixed(3)} bar a` : '',
+            Number.isFinite(endpointDelta) ? `Pin-Pout ${endpointDelta.toFixed(3)} bar` : ''
+        ].filter(Boolean).join(' | ')
+    };
+}
+
+function getPipeDeltaLabelWidth(displayText) {
+    if (!displayText) return 70;
+    return Math.max(70, Math.min(132, displayText.length * 5.4 + 10));
+}
+
+function getPipeDeltaPressureLabelSvg(pipeId, routePoints) {
+    const pipe = globalModel?.[pipeId];
+    const data = getPipeDeltaPressureData(pipe);
+    if (!data) return '';
+    const anchor = getPipeDeltaLabelAnchor(routePoints, 0.5, 10);
+    if (!anchor) return '';
+
+    const labelWidth = getPipeDeltaLabelWidth(data.displayText);
+    const labelHeight = 15;
+    return `
+        <g class="pipe-delta-label" data-pipe-id="${escapeSvgText(pipeId)}" transform="translate(${anchor.x.toFixed(1)} ${anchor.y.toFixed(1)}) rotate(${anchor.angle.toFixed(1)})">
+            <title>${escapeSvgText(data.title)}</title>
+            <rect class="pipe-delta-label-bg" x="${(-labelWidth / 2).toFixed(1)}" y="${(-labelHeight / 2).toFixed(1)}" width="${labelWidth.toFixed(1)}" height="${labelHeight}" rx="3" ry="3"></rect>
+            <text class="pipe-delta-label-text" x="0" y="0">${escapeSvgText(data.displayText)}</text>
+        </g>
+    `;
 }
 
 function getRouteLocationFromPoint(points, point) {
@@ -126,6 +277,11 @@ function getPipeTapPosition(pipeId, location = 0.5) {
     return routePoints ? getRoutePointAtLocation(routePoints, location) : null;
 }
 
+function getInstrumentLevelTargetPosition(targetId) {
+    return getObjectAnchorPosition(targetId, '.instrument-anchor.level-anchor')
+        || getObjectCenterPosition(targetId);
+}
+
 function getSourceAttachTargetPosition(link) {
     if (!link) return null;
     return getPortPosition(link.targetId, link.targetPort || '.port.inlet')
@@ -157,28 +313,33 @@ function drawConnections() {
             const strokeColor = isSelected ? '#ffb703' : 'var(--pipe-color)';
             const strokeWidth = isSelected ? '8' : '4';
             pathHTML += `<path class="pipe-line" data-pipe-id="${conn.pipeId}" d="${pointsToPath(routePoints)}" stroke="${strokeColor}" stroke-width="${strokeWidth}" fill="none" stroke-linejoin="round" stroke-linecap="round" style="cursor: pointer; pointer-events: stroke;" />`;
+            pathHTML += getPipeDeltaPressureLabelSvg(conn.pipeId, routePoints);
         }
     });
 
     instrumentLinks.forEach(link => {
         const instrument = globalModel[link.instrumentId];
-        const pipe = globalModel[link.pipeId];
-        if (!instrument || !pipe) return;
+        if (!instrument) return;
 
         const p1 = getObjectCenterPosition(link.instrumentId);
-        const p2 = getPipeTapPosition(link.pipeId, link.location);
+        const isLevelLink = link.linkType === 'level-measurement' || link.measuredVariable === 'level' || (link.targetId && !link.pipeId);
+        const p2 = isLevelLink
+            ? getInstrumentLevelTargetPosition(link.targetId)
+            : getPipeTapPosition(link.pipeId, link.location);
         if (!p1 || !p2) return;
 
         const selected = currentSelectedNode === link.instrumentId;
-        const strokeColor = selected ? '#0078d7' : '#627d98';
-        pathHTML += `<path class="instrument-tap-line" d="${pointsToPath([p1, p2])}" stroke="${strokeColor}" fill="none" />`;
-        pathHTML += `<circle class="instrument-tap-point" cx="${p2.x}" cy="${p2.y}" r="4" fill="#fff" stroke="${strokeColor}" stroke-width="1.5" />`;
+        const strokeColor = selected ? '#0078d7' : (isLevelLink ? '#2563eb' : '#627d98');
+        const lineClass = isLevelLink ? 'instrument-tap-line instrument-level-line' : 'instrument-tap-line';
+        pathHTML += `<path class="${lineClass}" d="${pointsToPath([p1, p2])}" stroke="${strokeColor}" fill="none" />`;
+        pathHTML += `<circle class="instrument-tap-point${isLevelLink ? ' instrument-level-point' : ''}" cx="${p2.x}" cy="${p2.y}" r="4" fill="#fff" stroke="${strokeColor}" stroke-width="1.5" />`;
     });
 
     sourceLinks.forEach(link => {
         const source = globalModel[link.sourceId];
         const target = globalModel[link.targetId];
         if (!source || !target) return;
+        if (typeof isSourceTypeSemanticAttachmentCapable === 'function' && !isSourceTypeSemanticAttachmentCapable(source)) return;
 
         const p1 = getPortPosition(link.sourceId, '.port.outlet') || getObjectCenterPosition(link.sourceId);
         const p2 = getSourceAttachTargetPosition(link);
@@ -199,12 +360,13 @@ function drawConnections() {
         if (p1) {
             const p2 = { x: pendingConnectionStart.currentX, y: pendingConnectionStart.currentY };
             if (pendingConnectionStart.kind === 'instrument') {
-                pathHTML += `<path class="instrument-tap-line pipe-preview-line" d="${pointsToPath([p1, p2])}" stroke="#627d98" fill="none" />`;
+                const isLevelPreview = pendingConnectionStart.attachMode === 'level';
+                pathHTML += `<path class="instrument-tap-line${isLevelPreview ? ' instrument-level-line' : ''} pipe-preview-line" d="${pointsToPath([p1, p2])}" stroke="${isLevelPreview ? '#2563eb' : '#627d98'}" fill="none" />`;
             } else if (pendingConnectionStart.kind === 'source') {
                 pathHTML += `<path class="source-feed-line pipe-preview-line" d="${pointsToPath([p1, p2])}" stroke="#5c7f5c" marker-end="url(#source-link-arrow)" fill="none" />`;
             } else {
                 const routePoints = buildPipeRoutePoints(p1, p2, pendingConnectionStart.routeStyle || 'Straight');
-                pathHTML += `<path class="pipe-preview-line" d="${pointsToPath(routePoints)}" stroke="var(--pipe-color)" stroke-width="4" stroke-dasharray="8,6" fill="none" stroke-linejoin="round" stroke-linecap="round" />`;
+                pathHTML += `<path class="pipe-preview-line hydraulic-preview-line" d="${pointsToPath(routePoints)}" stroke="var(--pipe-color)" stroke-width="4" fill="none" stroke-linejoin="round" stroke-linecap="round" />`;
             }
         }
     }
@@ -218,6 +380,7 @@ function drawConnections() {
             e.stopPropagation();
             if (appMode === 'CONNECT') {
                 if (pendingConnectionStart && pendingConnectionStart.kind === 'instrument') {
+                    if (pendingConnectionStart.attachMode === 'level') return;
                     attachInstrumentToPipe(pendingConnectionStart.id, path.dataset.pipeId, getPipeLocationFromEvent(path.dataset.pipeId, e));
                 } else if (pendingConnectionStart && pendingConnectionStart.kind === 'source') {
                     return;
@@ -235,18 +398,25 @@ function drawConnections() {
             e.preventDefault();
             e.stopPropagation();
             const pipeId = path.dataset.pipeId;
-            selectNode(pipeId, null);
+            document.querySelectorAll('.pfd-object').forEach(el => el.classList.remove('selected'));
+            currentSelectedNode = pipeId;
+            if (typeof updateCanvasSelectionActions === 'function') updateCanvasSelectionActions();
             drawConnections();
             const routeStyle = globalModel[pipeId]?.props?.routeStyle || 'Straight';
             const nextRouteStyle = routeStyle === 'Elbow' ? 'Straight' : 'Elbow';
             const items = [];
+            if (typeof addUserTaskObjectPropertiesMenuItem === 'function') {
+                addUserTaskObjectPropertiesMenuItem(items, pipeId);
+            }
 
             if (pendingConnectionStart && pendingConnectionStart.kind === 'instrument') {
                 const tapLocation = getPipeLocationFromEvent(pipeId, e);
-                items.push({
-                    label: 'Connect instrument here',
-                    action: () => attachInstrumentToPipe(pendingConnectionStart.id, pipeId, tapLocation)
-                });
+                if (pendingConnectionStart.attachMode !== 'level') {
+                    items.push({
+                        label: 'Connect instrument here',
+                        action: () => attachInstrumentToPipe(pendingConnectionStart.id, pipeId, tapLocation)
+                    });
+                }
             }
 
             items.push(

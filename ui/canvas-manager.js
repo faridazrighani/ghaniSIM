@@ -2,6 +2,26 @@ function isInstrumentType(type) {
     return INSTRUMENT_TYPES.includes(type);
 }
 
+function isCanvasLevelMeasurementInstrument(nodeOrType) {
+    if (typeof isLevelMeasurementInstrument === 'function') return isLevelMeasurementInstrument(nodeOrType);
+    const type = typeof nodeOrType === 'string' ? nodeOrType : nodeOrType?.type;
+    return type === 'levelController';
+}
+
+function isCanvasInstrumentLevelTarget(nodeId) {
+    if (typeof isInstrumentLevelAttachmentTarget === 'function') return isInstrumentLevelAttachmentTarget(nodeId);
+    const node = globalModel[nodeId];
+    return !!(node && ['tank', 'separator', 'verticalVessel'].includes(node.type));
+}
+
+const TOOLBAR_DRAG_THRESHOLD_PX = 6;
+const RIBBON_CLICK_OBJECT_GAP_PX = 64;
+const RIBBON_CLICK_MIN_STEP_PX = 172;
+const RIBBON_CLICK_LIVE_PANEL_GAP_PX = 34;
+const RIBBON_CLICK_ROW_STEP_PX = 190;
+let toolbarDragState = null;
+let ribbonClickPlacementState = null;
+
 const VISUAL_OBJECT_BASE_SIZES = {
     tank: { width: 82, height: 62 },
     separator: { width: 76, height: 44 },
@@ -35,13 +55,1128 @@ function applyObjectVisuals(nodeId) {
     el.style.setProperty('--visual-height', `${base.height * scale}px`);
 }
 
-function hasPumpOperatingWarning(node) {
-    if (!node || node.type !== 'pump') return false;
-    const status = String(node.results?.status || '').toLowerCase();
-    const warnings = Array.isArray(node.results?.warnings)
+const PUMP_OPERATING_STATUS_CLASSES = [
+    'pump-status-safe',
+    'pump-status-warning',
+    'pump-status-risk',
+    'pump-status-incomplete'
+];
+
+const PUMP_OPERATING_STATUS_LABELS = {
+    safe: 'Safe',
+    warning: 'Warning',
+    risk: 'NPSH Risk',
+    incomplete: 'Incomplete',
+    normal: ''
+};
+
+const WARNING_PANEL_STATUS_PRIORITY = {
+    risk: 0,
+    warning: 1,
+    advisory: 2,
+    incomplete: 3,
+    normal: 4
+};
+
+const CANVAS_WARNING_PANEL_MARGIN = 12;
+const WARNING_PANEL_DETAIL_MAX_CHARS = 92;
+let canvasWarningPanelDragState = null;
+let canvasWarningPanelViewportFrame = null;
+
+function getPumpOperatingWarnings(node) {
+    return Array.isArray(node?.results?.warnings)
         ? node.results.warnings.filter(Boolean)
         : [];
-    return status === 'warning' || warnings.length > 0;
+}
+
+function hasPumpOperatingWarning(node) {
+    if (!node || node.type !== 'pump') return false;
+    return ['warning', 'risk'].includes(getPumpOperatingVisualStatus(node));
+}
+
+function getPumpOperatingVisualStatus(node) {
+    if (!node || node.type !== 'pump') return 'normal';
+
+    const status = String(node.results?.status || '').trim().toLowerCase();
+    const cavitationStatus = String(node.results?.cavitationStatus || '').trim().toLowerCase();
+    const warnings = getPumpOperatingWarnings(node);
+    const unresolvedState = `${status} ${cavitationStatus}`;
+
+    if (cavitationStatus.includes('risk')) return 'risk';
+    if (cavitationStatus.includes('warning')) return 'warning';
+    if (
+        unresolvedState.includes('incomplete')
+        || unresolvedState.includes('input required')
+        || unresolvedState.includes('invalid')
+        || unresolvedState.includes('unknown')
+        || unresolvedState.includes('no operating solution')
+        || status === '-'
+        || cavitationStatus === '-'
+    ) {
+        return 'incomplete';
+    }
+    if (status === 'warning' || warnings.length > 0) return 'warning';
+    if (cavitationStatus.includes('safe') || status === 'ok') return 'safe';
+    return 'normal';
+}
+
+function formatPumpStatusMetric(value, unit = '') {
+    if (value === null || value === undefined || value === '') return null;
+    const text = String(value).trim();
+    if (!text || text === '-') return null;
+    return unit ? `${text} ${unit}` : text;
+}
+
+function addPumpStatusMetric(lines, label, value, unit = '') {
+    const formatted = formatPumpStatusMetric(value, unit);
+    if (formatted) lines.push(`${label}: ${formatted}`);
+}
+
+function getPumpOperatingStatusTooltip(node, visualStatus) {
+    const results = node?.results || {};
+    const warnings = getPumpOperatingWarnings(node);
+    const lines = [
+        `Pump status: ${results.cavitationStatus || results.status || visualStatus || 'Review operating results'}`
+    ];
+
+    addPumpStatusMetric(lines, 'NPSHa', results.npsha, 'm');
+    addPumpStatusMetric(lines, 'NPSHr', results.npshr, 'm');
+    addPumpStatusMetric(lines, 'NPSH margin', results.npshMargin, 'm');
+    addPumpStatusMetric(lines, 'NPSH ratio', results.npshRatio);
+    addPumpStatusMetric(lines, 'Required NPSHa', results.requiredNpsha, 'm');
+    addPumpStatusMetric(lines, 'NPSH excess', results.npshExcess, 'm');
+    addPumpStatusMetric(lines, 'Dominant suction loss', results.dominantSuctionLoss);
+
+    if (warnings.length > 0) {
+        lines.push(`Warnings: ${warnings.join(' | ')}`);
+    }
+
+    return lines.join('\n');
+}
+
+function updatePumpStatusBadge(el, visualStatus) {
+    const badge = el.querySelector('.pump-status-badge');
+    if (!badge) return;
+
+    badge.classList.remove(
+        'pump-status-badge-safe',
+        'pump-status-badge-warning',
+        'pump-status-badge-risk',
+        'pump-status-badge-incomplete'
+    );
+
+    const label = PUMP_OPERATING_STATUS_LABELS[visualStatus] || '';
+    if (!label) {
+        badge.hidden = true;
+        badge.textContent = '';
+        return;
+    }
+
+    badge.hidden = false;
+    badge.textContent = label;
+    badge.classList.add(`pump-status-badge-${visualStatus}`);
+}
+
+function isPumpLiveResultAvailable(node) {
+    if (!node || node.type !== 'pump') return false;
+    const status = String(node.results?.status || '').trim().toLowerCase();
+    const cavitationStatus = String(node.results?.cavitationStatus || '').trim().toLowerCase();
+    if (!cavitationStatus || cavitationStatus === '-') return false;
+    return !(
+        status.includes('incomplete')
+        || status.includes('input required')
+        || status.includes('invalid')
+        || status.includes('no operating')
+        || cavitationStatus.includes('incomplete')
+        || cavitationStatus.includes('input required')
+        || cavitationStatus.includes('unknown')
+        || cavitationStatus === '-'
+    );
+}
+
+function getPumpLiveDisplayUnit(quantity, options = {}) {
+    if (typeof getDisplayUnit === 'function') return getDisplayUnit(quantity, options);
+    if (quantity === 'flow') return 'm3/h';
+    if (quantity === 'pressureAbs') return 'bar a';
+    if (quantity === 'head') return 'm';
+    return options.unit || '';
+}
+
+function formatPumpLiveNumber(value, digits = 1, options = {}) {
+    const number = parseFloat(value);
+    if (!Number.isFinite(number)) return '-';
+    const abs = Math.abs(number);
+    const formatted = abs > 0 && abs < 0.001
+        ? number.toExponential(2)
+        : number.toFixed(digits);
+    return options.showSign && number > 0 ? `+${formatted}` : formatted;
+}
+
+function getPumpLiveDisplayValue(value, quantity, digits = 1, options = {}) {
+    const number = parseFloat(value);
+    if (!Number.isFinite(number)) return '-';
+    const displayValue = typeof convertToDisplay === 'function'
+        ? convertToDisplay(number, quantity)
+        : number;
+    return formatPumpLiveNumber(displayValue, digits, options);
+}
+
+function getPumpLiveVaporPressureBasis() {
+    const vaporPressure = parseFloat(globalModel.FLUID?.props?.vaporPressure);
+    return Number.isFinite(vaporPressure) ? vaporPressure : null;
+}
+
+function buildPumpLiveParameterRows(node) {
+    const solved = isPumpLiveResultAvailable(node);
+    const results = node.results || {};
+    const flowUnit = getPumpLiveDisplayUnit('flow');
+    const headUnit = getPumpLiveDisplayUnit('head');
+    const vaporPressureUnit = getPumpLiveDisplayUnit('pressureAbs');
+    const pressureAbsUnit = getPumpLiveDisplayUnit('pressureAbs');
+    const basisVaporPressure = Number.isFinite(parseFloat(results.vaporPressureBasis))
+        ? parseFloat(results.vaporPressureBasis)
+        : getPumpLiveVaporPressureBasis();
+    const liveVaporPressure = parseFloat(results.vaporPressureLive);
+    const solvedValue = (key, quantity, digits = 1, options = {}) => (
+        solved ? getPumpLiveDisplayValue(results[key], quantity, digits, options) : '-'
+    );
+    const pressureValue = (value) => getPumpLiveDisplayValue(value, 'pressureAbs', 3);
+
+    return [
+        { type: 'section', label: 'Suction' },
+        { label: 'Flow', title: 'Operating flow rate', value: solvedValue('flow', 'flow', 1), unit: flowUnit },
+        { label: 'Suction Press.', title: 'Pump suction absolute pressure', value: solvedValue('suctionPressure', 'pressureAbs', 3), unit: pressureAbsUnit },
+        { label: 'NPSH Available', title: 'Available NPSH at pump suction', value: solvedValue('npsha', 'head', 1), unit: headUnit },
+        { label: 'NPSH Required', title: 'Required NPSH from pump input or curve', value: solvedValue('npshr', 'head', 1), unit: headUnit },
+        { label: 'NPSH Margin', title: 'NPSH margin = NPSH Available - NPSH Required', value: solvedValue('npshMargin', 'head', 1, { showSign: true }), unit: headUnit },
+        { label: 'NPSH Ratio', title: 'NPSH ratio = NPSH Available / NPSH Required', value: solved ? formatPumpLiveNumber(results.npshRatio, 2) : '-', unit: '' },
+        { label: 'Fluid Vapor Press.', title: 'Fluid Basis vapor pressure', value: pressureValue(basisVaporPressure), unit: vaporPressureUnit },
+        { label: 'NPSH Vapor Press.', title: 'Live pump vapor pressure used in NPSH', value: solved ? pressureValue(liveVaporPressure) : '-', unit: vaporPressureUnit },
+        { type: 'section', label: 'Discharge' },
+        { label: 'Pump Head', title: 'Pump head added from suction to discharge', value: solvedValue('head', 'head', 1), unit: headUnit },
+        { label: 'Discharge Press.', title: 'Pump discharge absolute pressure', value: solvedValue('dischargePressure', 'pressureAbs', 3), unit: pressureAbsUnit }
+    ];
+}
+
+function getTankLiveAbsolutePressureBar(node) {
+    const resultPressure = parseFloat(node?.results?.operatingPressureAbsolute);
+    if (Number.isFinite(resultPressure)) return resultPressure;
+    if (typeof getNodeAbsolutePressureBar === 'function') {
+        const pressure = getNodeAbsolutePressureBar(node);
+        if (Number.isFinite(pressure)) return pressure;
+    }
+    const input = parseFloat(node?.props?.pressure);
+    const basis = node?.props?.pressureInputBasis || 'Gauge';
+    if (!Number.isFinite(input)) return null;
+    return basis === 'Absolute' ? input : input + 1.01325;
+}
+
+function getTankLiveSurfaceElevation(node) {
+    const baseElevation = parseFloat(node?.props?.elevation);
+    const liquidLevel = parseFloat(node?.props?.liquidLevel);
+    if (!Number.isFinite(baseElevation) || !Number.isFinite(liquidLevel)) return null;
+    return baseElevation + liquidLevel;
+}
+
+function getTankLiveDisplayValue(value, quantity, digits = 1, options = {}) {
+    return getPumpLiveDisplayValue(value, quantity, digits, options);
+}
+
+function getTankLiveDisplayUnit(quantity, options = {}) {
+    return getPumpLiveDisplayUnit(quantity, options);
+}
+
+function getTankOperatingVisualStatus(node) {
+    if (!node || node.type !== 'tank') return 'normal';
+    const results = node.results || {};
+    const warnings = getGenericNodeWarnings(node);
+    const status = String(results.status || '').trim().toLowerCase();
+    const connectedPipes = Array.isArray(results.connectedPipes) ? results.connectedPipes : [];
+    const connectedSources = Array.isArray(results.connectedSources) ? results.connectedSources : [];
+
+    if (warnings.some(warning => /not valid|vaporizing|draw vapor|below vapor|above current liquid/i.test(String(warning)))) {
+        return 'risk';
+    }
+    if (warnings.length > 0 || status === 'review' || status === 'warning') return 'warning';
+    if (status === 'advisory') return 'advisory';
+    if (connectedPipes.length === 0 && connectedSources.length === 0) return 'incomplete';
+    if (status.includes('solved') || connectedPipes.length > 0 || connectedSources.length > 0) return 'safe';
+    return 'normal';
+}
+
+function getTankOperatingStatusTooltip(nodeId, node, visualStatus) {
+    const results = node?.results || {};
+    const props = node?.props || {};
+    const warnings = getGenericNodeWarnings(node);
+    const lines = [
+        `Tank status: ${results.status || visualStatus || 'Review tank boundary'}`
+    ];
+
+    addPumpStatusMetric(lines, 'Surface pressure', getTankLiveAbsolutePressureBar(node), 'bar a');
+    addPumpStatusMetric(lines, 'Liquid surface elevation', getTankLiveSurfaceElevation(node), 'm');
+    addPumpStatusMetric(lines, 'Outlet nozzle elevation', props.outletNozzleElevation, 'm');
+    addPumpStatusMetric(lines, 'Current level', props.liquidLevel, 'm');
+    addPumpStatusMetric(lines, 'Liquid volume', results.liquidVolume ?? props.liquidVolume, 'm3');
+    addPumpStatusMetric(lines, 'Outlet flow', results.outletFlow, 'm3/h');
+    addPumpStatusMetric(lines, 'Net flow', results.netFlow, 'm3/h');
+    addPumpStatusMetric(lines, 'Level trend', results.levelTrend);
+
+    if (warnings.length > 0) {
+        lines.push(`Warnings: ${warnings.join(' | ')}`);
+    }
+
+    return lines.join('\n');
+}
+
+function buildTankLiveParameterRows(nodeId, node) {
+    const results = node.results || {};
+    const props = node.props || {};
+    const headUnit = getTankLiveDisplayUnit('head');
+    const pressureAbsUnit = getTankLiveDisplayUnit('pressureAbs');
+    const volumeUnit = getTankLiveDisplayUnit('volume');
+    const flowUnit = getTankLiveDisplayUnit('flow');
+    const percentUnit = getTankLiveDisplayUnit('percent');
+
+    const pressureValue = value => (
+        Number.isFinite(parseFloat(value)) ? getTankLiveDisplayValue(value, 'pressureAbs', 3) : '-'
+    );
+    const headValue = value => (
+        Number.isFinite(parseFloat(value)) ? getTankLiveDisplayValue(value, 'head', 2) : '-'
+    );
+    const volumeValue = value => (
+        Number.isFinite(parseFloat(value)) ? getTankLiveDisplayValue(value, 'volume', 1) : '-'
+    );
+    const flowValue = (value, options = {}) => (
+        Number.isFinite(parseFloat(value)) ? getTankLiveDisplayValue(value, 'flow', 1, options) : '-'
+    );
+    const percentValue = value => (
+        Number.isFinite(parseFloat(value)) ? formatPumpLiveNumber(value, 1) : '-'
+    );
+
+    return [
+        { type: 'section', label: 'Boundary' },
+        { label: 'Surface Press.', title: 'Tank vapor-space/surface absolute pressure used as source boundary pressure', value: pressureValue(getTankLiveAbsolutePressureBar(node)), unit: pressureAbsUnit },
+        { label: 'Surface Elev.', title: 'Liquid surface elevation = tank base elevation + current liquid level; used for NPSH static head', value: headValue(getTankLiveSurfaceElevation(node)), unit: headUnit },
+        { label: 'Outlet Elev.', title: 'Tank outlet nozzle elevation where the solid hydraulic path starts', value: headValue(props.outletNozzleElevation), unit: headUnit },
+        { type: 'section', label: 'Inventory' },
+        { label: 'Level', title: 'Current liquid level above tank base', value: headValue(props.liquidLevel), unit: headUnit },
+        { label: 'Level %', title: 'Current liquid level as percent of tank height', value: percentValue(results.fillPercent ?? props.fillPercent), unit: percentUnit },
+        { label: 'Volume', title: 'Current liquid inventory volume', value: volumeValue(results.liquidVolume ?? props.liquidVolume), unit: volumeUnit },
+        { type: 'section', label: 'Flow' },
+        { label: 'Outlet Flow', title: 'Solved flow leaving tank through solid hydraulic outlet path', value: flowValue(results.outletFlow), unit: flowUnit },
+        { label: 'Net Flow', title: 'Tank inventory balance = inlet flow - outlet flow', value: flowValue(results.netFlow, { showSign: true }), unit: flowUnit },
+        { label: 'Trend', title: 'Level trend from steady net-flow balance; level is not dynamically integrated over time', value: results.levelTrend || '-', unit: '' }
+    ];
+}
+
+function getSourceBoundaryShortMode(node) {
+    const sourceType = typeof getSourceTypeValue === 'function'
+        ? getSourceTypeValue(node, null, globalModel)
+        : (node?.props?.sourceType || '');
+    if (sourceType === 'Open Tank / Reservoir') return 'Tank';
+    if (sourceType === 'Pressurized Vessel') return 'Vessel';
+    if (sourceType === 'External Header / Pipe Tie-in') return 'Header';
+    if (sourceType === 'Fixed Flow Source') return 'Fixed';
+    if (sourceType === 'Standalone Boundary Source') return 'Stand';
+    return sourceType || '-';
+}
+
+function getSourceLiveLink(sourceId) {
+    if (typeof getSourceLinkForSource === 'function') return getSourceLinkForSource(sourceId);
+    if (typeof getSourceLink === 'function') return getSourceLink(sourceId);
+    return null;
+}
+
+function getSourceLivePumpImpact(sourceId) {
+    if (typeof globalModel === 'undefined') return null;
+    const source = globalModel[sourceId];
+    if (!source || source.type !== 'source') return null;
+
+    const link = getSourceLiveLink(sourceId);
+    const attachedTargetId = link?.targetId || '';
+    const pumpState = typeof window !== 'undefined' ? window.hydraulicNetworkState?.pumps || {} : {};
+
+    for (const pumpId of Object.keys(pumpState)) {
+        const state = pumpState[pumpId] || {};
+        const suctionPath = state.suctionPath || {};
+        const sourceMatches = suctionPath.boundaryId === sourceId;
+        const attachedMatches = attachedTargetId
+            && (suctionPath.boundaryId === attachedTargetId || suctionPath.boundaryAttachmentTargetId === attachedTargetId);
+        if (sourceMatches || attachedMatches) {
+            return {
+                pumpId,
+                pump: globalModel[pumpId],
+                state
+            };
+        }
+    }
+
+    return Object.keys(globalModel)
+        .filter(pumpId => globalModel[pumpId]?.type === 'pump')
+        .map(pumpId => {
+            const trace = globalModel[pumpId]?.results?.npshEvaluation?.calculationTrace;
+            const boundaryId = trace?.boundary?.id;
+            const attachedEquipment = trace?.boundary?.attachedEquipment;
+            const matches = boundaryId === sourceId
+                || (attachedTargetId && (boundaryId === attachedTargetId || attachedEquipment === attachedTargetId));
+            return matches ? { pumpId, pump: globalModel[pumpId], state: null } : null;
+        })
+        .find(Boolean) || null;
+}
+
+function getSourceLiveEffectiveFluid(source) {
+    const fluidProps = globalModel?.FLUID?.props || {};
+    if (typeof getFluidPropsAtSourceTemperature === 'function') {
+        return getFluidPropsAtSourceTemperature(source, fluidProps);
+    }
+    return fluidProps;
+}
+
+function getSourceLiveBoundarySnapshot(sourceId, node) {
+    const impact = getSourceLivePumpImpact(sourceId);
+    const boundary = typeof resolveSourceBoundaryData === 'function'
+        ? resolveSourceBoundaryData(sourceId, globalModel)
+        : null;
+    const effectiveFluid = getSourceLiveEffectiveFluid(node);
+    const traceBasis = impact?.pump?.results?.npshEvaluation?.calculationTrace?.basis || {};
+    const densityRaw = parseFloat(traceBasis.density ?? effectiveFluid?.density ?? globalModel?.FLUID?.props?.density);
+    const density = Number.isFinite(densityRaw) ? Math.max(densityRaw, 1) : 1000;
+    const pumpFlow = parseFloat(impact?.pump?.results?.flow);
+    const sourceFlow = parseFloat(node?.props?.flow);
+    const flow = Number.isFinite(pumpFlow) ? pumpFlow : (Number.isFinite(sourceFlow) ? sourceFlow : null);
+    const path = impact?.state?.suctionPath || null;
+    const velocityHead = typeof getSourceVelocityHeadForBoundary === 'function'
+        ? getSourceVelocityHeadForBoundary(node, flow || 0, path, globalModel)
+        : 0;
+    const pressureHead = boundary && Number.isFinite(boundary.pressureAbsBar) && typeof pressureBarToHead === 'function'
+        ? pressureBarToHead(boundary.pressureAbsBar, density)
+        : null;
+    const sourceHead = Number.isFinite(pressureHead) && Number.isFinite(boundary?.elevation)
+        ? pressureHead + boundary.elevation + (Number.isFinite(velocityHead) ? velocityHead : 0)
+        : null;
+    const suctionLoss = parseFloat(impact?.pump?.results?.suctionLoss ?? impact?.state?.snapshot?.suctionLoss);
+    const npsha = parseFloat(impact?.pump?.results?.npsha ?? impact?.state?.snapshot?.npsha);
+
+    return {
+        impact,
+        boundary,
+        density,
+        flow,
+        sourceHead,
+        suctionLoss: Number.isFinite(suctionLoss) ? suctionLoss : null,
+        npshaAtPump: Number.isFinite(npsha) ? npsha : null,
+        warnings: [...new Set([...(boundary?.warnings || []), ...(effectiveFluid?.warnings || [])].filter(Boolean))]
+    };
+}
+
+function getSourceOperatingVisualStatus(sourceId, node) {
+    if (!node || node.type !== 'source') return 'normal';
+    const snapshot = getSourceLiveBoundarySnapshot(sourceId, node);
+    if (snapshot.impact?.pump) return getPumpOperatingVisualStatus(snapshot.impact.pump);
+    if (snapshot.warnings.length > 0) return 'warning';
+    return 'incomplete';
+}
+
+function getSourceOperatingStatusTooltip(sourceId, node, visualStatus) {
+    const snapshot = getSourceLiveBoundarySnapshot(sourceId, node);
+    const boundary = snapshot.boundary || {};
+    const lines = [
+        `SRC status: ${snapshot.impact?.pumpId ? `Contributing to ${snapshot.impact.pumpId}` : 'No solved pump suction path'}`,
+        `Mode: ${getSourceBoundaryShortMode(node)}`
+    ];
+
+    addPumpStatusMetric(lines, 'Flow to suction network', snapshot.flow, 'm3/h');
+    addPumpStatusMetric(lines, 'Source pressure', boundary.pressureAbsBar, 'bar a');
+    addPumpStatusMetric(lines, 'Source elevation', boundary.elevation, 'm');
+    addPumpStatusMetric(lines, 'Source head', snapshot.sourceHead, 'm');
+    addPumpStatusMetric(lines, 'Suction loss to pump', snapshot.suctionLoss, 'm');
+    addPumpStatusMetric(lines, 'NPSHa at pump', snapshot.npshaAtPump, 'm');
+
+    if (snapshot.warnings.length > 0) {
+        lines.push(`Warnings: ${snapshot.warnings.join(' | ')}`);
+    } else if (visualStatus === 'incomplete') {
+        lines.push('Add a valid hydraulic path from SRC or attached equipment to pump suction to solve NPSHa@P.');
+    }
+
+    return lines.join('\n');
+}
+
+function buildSourceLiveParameterRows(sourceId, node) {
+    const snapshot = getSourceLiveBoundarySnapshot(sourceId, node);
+    const boundary = snapshot.boundary || {};
+    const flowUnit = getPumpLiveDisplayUnit('flow');
+    const headUnit = getPumpLiveDisplayUnit('head');
+    const pressureAbsUnit = getPumpLiveDisplayUnit('pressureAbs');
+    const flowValue = (value) => (
+        Number.isFinite(parseFloat(value)) ? getPumpLiveDisplayValue(value, 'flow', 1) : '-'
+    );
+    const pressureValue = (value) => (
+        Number.isFinite(parseFloat(value)) ? getPumpLiveDisplayValue(value, 'pressureAbs', 3) : '-'
+    );
+    const headValue = (value) => (
+        Number.isFinite(parseFloat(value)) ? getPumpLiveDisplayValue(value, 'head', 1) : '-'
+    );
+
+    return [
+        { label: 'Mode', title: 'SRC boundary mode', value: getSourceBoundaryShortMode(node), unit: '' },
+        { label: 'Outlet Flow', title: 'Flow leaving the SRC boundary or attached source boundary toward pump suction', value: flowValue(snapshot.flow), unit: flowUnit },
+        { label: 'Source Press.', title: 'Absolute source boundary pressure used for suction-head calculation', value: pressureValue(boundary.pressureAbsBar), unit: pressureAbsUnit },
+        { label: 'Source Elev.', title: 'Effective source elevation or inherited liquid surface elevation', value: headValue(boundary.elevation), unit: headUnit },
+        { label: 'Source Head', title: 'Total source hydraulic head before suction losses', value: headValue(snapshot.sourceHead), unit: headUnit },
+        { label: 'Suction Loss', title: 'Suction path loss from source boundary to pump suction', value: headValue(snapshot.suctionLoss), unit: headUnit },
+        { label: 'NPSH at Pump', title: `NPSH available at pump suction${snapshot.impact?.pumpId ? ` ${snapshot.impact.pumpId}` : ''}`, value: headValue(snapshot.npshaAtPump), unit: headUnit }
+    ];
+}
+
+function getSinkBoundaryShortMode(node) {
+    const mode = typeof getSinkBoundaryModeValue === 'function'
+        ? getSinkBoundaryModeValue(node)
+        : (node?.props?.boundaryMode || '');
+    if (mode === 'Free Outlet / Atmospheric Discharge') return 'Free';
+    if (mode === 'Outlet Pressure Boundary' || mode === 'Outlet Pressure') return 'P-Bnd';
+    if (mode === 'Flow Demand Boundary' || mode === 'Flow Demand') return 'Flow';
+    return mode || '-';
+}
+
+function isSinkLiveFlowDemand(node) {
+    if (typeof isSinkFlowDemandBoundary === 'function') return isSinkFlowDemandBoundary(node);
+    return ['Flow Demand', 'Flow Demand Boundary'].includes(node?.props?.boundaryMode);
+}
+
+function getSinkLiveSelectedPressure(node) {
+    const results = node?.results || {};
+    const calculatedPressure = parseFloat(results.calculatedPressure);
+    const boundaryPressure = parseFloat(results.boundaryPressure);
+    if (isSinkLiveFlowDemand(node) && Number.isFinite(calculatedPressure)) return calculatedPressure;
+    if (Number.isFinite(boundaryPressure)) return boundaryPressure;
+    if (Number.isFinite(calculatedPressure)) return calculatedPressure;
+    if (typeof getSinkBoundaryAbsolutePressureBar === 'function') {
+        const pressure = getSinkBoundaryAbsolutePressureBar(node);
+        return Number.isFinite(pressure) ? pressure : null;
+    }
+    return null;
+}
+
+function getSinkLivePumpImpact(sinkId) {
+    if (typeof globalModel === 'undefined') return null;
+    return Object.keys(globalModel)
+        .map(nodeId => globalModel[nodeId])
+        .find(node => node?.type === 'pump' && node.results?.downstreamBoundary === sinkId) || null;
+}
+
+function getSinkLiveVaporPressure() {
+    if (typeof globalModel === 'undefined') return null;
+    const vaporPressure = parseFloat(globalModel.FLUID?.props?.vaporPressure);
+    return Number.isFinite(vaporPressure) ? vaporPressure : null;
+}
+
+function getSinkOperatingVisualStatus(node) {
+    if (!node || node.type !== 'sink') return 'normal';
+    const results = node.results || {};
+    const status = String(results.status || '').trim().toLowerCase();
+    const warnings = Array.isArray(results.warnings) ? results.warnings.filter(Boolean) : [];
+    const selectedPressure = getSinkLiveSelectedPressure(node);
+    const vaporPressure = getSinkLiveVaporPressure();
+
+    if (Number.isFinite(selectedPressure) && Number.isFinite(vaporPressure) && selectedPressure <= vaporPressure) {
+        return 'risk';
+    }
+    if (status.includes('inactive') || node.props?.active === 'Inactive') return 'incomplete';
+    if (
+        status === '-'
+        || warnings.some(warning => /not connected|no solved|must be greater|incomplete/i.test(String(warning)))
+    ) {
+        return 'incomplete';
+    }
+    if (status === 'warning' || warnings.length > 0) return 'warning';
+    if (status === 'ok') return 'safe';
+    return 'normal';
+}
+
+function getSinkOperatingStatusTooltip(nodeId, node, visualStatus) {
+    const results = node?.results || {};
+    const impactPump = getSinkLivePumpImpact(nodeId);
+    const selectedPressure = getSinkLiveSelectedPressure(node);
+    const vaporPressure = getSinkLiveVaporPressure();
+    const pressureMargin = Number.isFinite(selectedPressure) && Number.isFinite(vaporPressure)
+        ? selectedPressure - vaporPressure
+        : null;
+    const lines = [
+        `SNK status: ${results.status || visualStatus || 'Review downstream boundary'}`,
+        `Mode: ${getSinkBoundaryShortMode(node)}`
+    ];
+
+    addPumpStatusMetric(lines, isSinkLiveFlowDemand(node) ? 'Required outlet pressure' : 'Outlet pressure', selectedPressure, 'bar a');
+    addPumpStatusMetric(lines, 'Outlet flow', results.flow, 'm3/h');
+    addPumpStatusMetric(lines, 'SNK hydraulic head', results.hydraulicHead, 'm');
+    addPumpStatusMetric(lines, 'Discharge loss', impactPump?.results?.dischargeLoss, 'm');
+    addPumpStatusMetric(lines, 'Vapor pressure', vaporPressure, 'bar a');
+    addPumpStatusMetric(lines, 'Outlet pressure minus vapor pressure', pressureMargin, 'bar');
+    addPumpStatusMetric(lines, 'Pump NPSH margin', impactPump?.results?.npshMargin, 'm');
+
+    if (results.warnings?.length) {
+        lines.push(`Warnings: ${results.warnings.join(' | ')}`);
+    }
+
+    return lines.join('\n');
+}
+
+function buildSinkLiveParameterRows(nodeId, node) {
+    const results = node.results || {};
+    const impactPump = getSinkLivePumpImpact(nodeId);
+    const isFlowDemand = isSinkLiveFlowDemand(node);
+    const flowUnit = getPumpLiveDisplayUnit('flow');
+    const headUnit = getPumpLiveDisplayUnit('head');
+    const pressureAbsUnit = getPumpLiveDisplayUnit('pressureAbs');
+    const pressureDeltaUnit = getPumpLiveDisplayUnit('pressureDelta');
+    const selectedPressure = getSinkLiveSelectedPressure(node);
+    const vaporPressure = getSinkLiveVaporPressure();
+    const pressureMargin = Number.isFinite(selectedPressure) && Number.isFinite(vaporPressure)
+        ? selectedPressure - vaporPressure
+        : null;
+    const pressureValue = (value, quantity = 'pressureAbs', digits = 3, options = {}) => (
+        Number.isFinite(parseFloat(value)) ? getPumpLiveDisplayValue(value, quantity, digits, options) : '-'
+    );
+    const headValue = (value, options = {}) => (
+        Number.isFinite(parseFloat(value)) ? getPumpLiveDisplayValue(value, 'head', 1, options) : '-'
+    );
+    const flowValue = (value) => (
+        Number.isFinite(parseFloat(value)) ? getPumpLiveDisplayValue(value, 'flow', 1) : '-'
+    );
+
+    if (isFlowDemand) {
+        return [
+            { label: 'Mode', title: 'SNK boundary mode', value: getSinkBoundaryShortMode(node), unit: '' },
+            { label: 'Demand Flow', title: 'Specified discharge flow demand', value: flowValue(node.props?.demandFlow), unit: flowUnit },
+            { label: 'Outlet Flow', title: 'Solved outlet flow rate', value: flowValue(results.flow), unit: flowUnit },
+            { label: 'Required Press.', title: 'Required outlet pressure calculated from pump and network', value: pressureValue(selectedPressure), unit: pressureAbsUnit },
+            { label: 'Discharge Loss', title: 'Discharge path head loss from pump to SNK', value: headValue(impactPump?.results?.dischargeLoss), unit: headUnit },
+            { label: 'Vapor Press.', title: 'Fluid Basis vapor pressure', value: pressureValue(vaporPressure), unit: pressureAbsUnit },
+            { label: 'Vapor Margin', title: 'Outlet pressure margin above vapor pressure', value: pressureValue(pressureMargin, 'pressureDelta', 3, { showSign: true }), unit: pressureDeltaUnit },
+            { label: 'NPSH Margin', title: 'Pump NPSH margin influenced by this downstream boundary', value: headValue(impactPump?.results?.npshMargin, { showSign: true }), unit: headUnit }
+        ];
+    }
+
+    return [
+        { label: 'Mode', title: 'SNK boundary mode', value: getSinkBoundaryShortMode(node), unit: '' },
+        { label: 'Outlet Flow', title: 'Solved outlet flow rate', value: flowValue(results.flow), unit: flowUnit },
+        { label: 'Outlet Press.', title: 'Outlet boundary pressure in absolute units', value: pressureValue(selectedPressure), unit: pressureAbsUnit },
+        { label: 'Sink Elev.', title: 'SNK outlet elevation', value: headValue(node.props?.elevation), unit: headUnit },
+        { label: 'Sink Head', title: 'SNK hydraulic head', value: headValue(results.hydraulicHead), unit: headUnit },
+        { label: 'Discharge Loss', title: 'Discharge path head loss from pump to SNK', value: headValue(impactPump?.results?.dischargeLoss), unit: headUnit },
+        { label: 'Vapor Press.', title: 'Fluid Basis vapor pressure', value: pressureValue(vaporPressure), unit: pressureAbsUnit },
+        { label: 'Vapor Margin', title: 'Outlet pressure margin above vapor pressure', value: pressureValue(pressureMargin, 'pressureDelta', 3, { showSign: true }), unit: pressureDeltaUnit }
+    ];
+}
+
+function updatePumpLiveParameterPanel(el, node, visualStatus) {
+    const panel = el.querySelector('.pump-live-params');
+    if (!panel) return;
+
+    panel.classList.remove(
+        'pump-live-params-safe',
+        'pump-live-params-warning',
+        'pump-live-params-risk',
+        'pump-live-params-incomplete'
+    );
+    if (visualStatus !== 'normal') {
+        panel.classList.add(`pump-live-params-${visualStatus}`);
+    }
+
+    const rows = buildPumpLiveParameterRows(node);
+    panel.replaceChildren();
+    rows.forEach(row => {
+        if (row.type === 'section') {
+            const section = document.createElement('div');
+            section.className = 'pump-live-param-section';
+            section.textContent = row.label;
+            panel.appendChild(section);
+            return;
+        }
+
+        const item = document.createElement('div');
+        item.className = 'pump-live-param-row';
+        item.title = row.title;
+
+        const label = document.createElement('span');
+        label.className = 'pump-live-param-label';
+        label.textContent = row.label;
+
+        const value = document.createElement('strong');
+        value.className = 'pump-live-param-value';
+        value.textContent = row.value;
+
+        const unit = document.createElement('span');
+        unit.className = 'pump-live-param-unit';
+        unit.textContent = row.value === '-' ? '' : row.unit;
+
+        item.append(label, value, unit);
+        panel.appendChild(item);
+    });
+}
+
+function updateTankLiveParameterPanel(el, nodeId, node, visualStatus) {
+    const panel = el.querySelector('.tank-live-params');
+    if (!panel) return;
+
+    panel.classList.remove(
+        'tank-live-params-safe',
+        'tank-live-params-advisory',
+        'tank-live-params-warning',
+        'tank-live-params-risk',
+        'tank-live-params-incomplete'
+    );
+    if (visualStatus !== 'normal') {
+        panel.classList.add(`tank-live-params-${visualStatus}`);
+    }
+
+    const rows = buildTankLiveParameterRows(nodeId, node);
+    panel.replaceChildren();
+    rows.forEach(row => {
+        if (row.type === 'section') {
+            const section = document.createElement('div');
+            section.className = 'tank-live-param-section';
+            section.textContent = row.label;
+            panel.appendChild(section);
+            return;
+        }
+
+        const item = document.createElement('div');
+        item.className = 'tank-live-param-row';
+        item.title = row.title;
+
+        const label = document.createElement('span');
+        label.className = 'tank-live-param-label';
+        label.textContent = row.label;
+
+        const value = document.createElement('strong');
+        value.className = 'tank-live-param-value';
+        value.textContent = row.value;
+
+        const unit = document.createElement('span');
+        unit.className = 'tank-live-param-unit';
+        unit.textContent = row.value === '-' ? '' : row.unit;
+
+        item.append(label, value, unit);
+        panel.appendChild(item);
+    });
+}
+
+function updateSourceLiveParameterPanel(el, nodeId, node, visualStatus) {
+    const panel = el.querySelector('.source-live-params');
+    if (!panel) return;
+
+    panel.classList.remove(
+        'source-live-params-safe',
+        'source-live-params-warning',
+        'source-live-params-risk',
+        'source-live-params-incomplete'
+    );
+    if (visualStatus !== 'normal') {
+        panel.classList.add(`source-live-params-${visualStatus}`);
+    }
+
+    const rows = buildSourceLiveParameterRows(nodeId, node);
+    panel.replaceChildren();
+    rows.forEach(row => {
+        const item = document.createElement('div');
+        item.className = 'source-live-param-row';
+        item.title = row.title;
+
+        const label = document.createElement('span');
+        label.className = 'source-live-param-label';
+        label.textContent = row.label;
+
+        const value = document.createElement('strong');
+        value.className = 'source-live-param-value';
+        value.textContent = row.value;
+
+        const unit = document.createElement('span');
+        unit.className = 'source-live-param-unit';
+        unit.textContent = row.value === '-' ? '' : row.unit;
+
+        item.append(label, value, unit);
+        panel.appendChild(item);
+    });
+}
+
+function updateSinkLiveParameterPanel(el, nodeId, node, visualStatus) {
+    const panel = el.querySelector('.sink-live-params');
+    if (!panel) return;
+
+    panel.classList.remove(
+        'sink-live-params-safe',
+        'sink-live-params-warning',
+        'sink-live-params-risk',
+        'sink-live-params-incomplete'
+    );
+    if (visualStatus !== 'normal') {
+        panel.classList.add(`sink-live-params-${visualStatus}`);
+    }
+
+    const rows = buildSinkLiveParameterRows(nodeId, node);
+    panel.replaceChildren();
+    rows.forEach(row => {
+        const item = document.createElement('div');
+        item.className = 'sink-live-param-row';
+        item.title = row.title;
+
+        const label = document.createElement('span');
+        label.className = 'sink-live-param-label';
+        label.textContent = row.label;
+
+        const value = document.createElement('strong');
+        value.className = 'sink-live-param-value';
+        value.textContent = row.value;
+
+        const unit = document.createElement('span');
+        unit.className = 'sink-live-param-unit';
+        unit.textContent = row.value === '-' ? '' : row.unit;
+
+        item.append(label, value, unit);
+        panel.appendChild(item);
+    });
+}
+
+function getGenericNodeWarnings(node) {
+    return Array.isArray(node?.results?.warnings)
+        ? node.results.warnings.filter(Boolean)
+        : [];
+}
+
+function getGenericWarningStatus(node) {
+    const status = String(node?.results?.status || '').trim().toLowerCase();
+    const warnings = getGenericNodeWarnings(node);
+
+    if (
+        status.includes('incomplete')
+        || status.includes('invalid')
+        || status.includes('unknown')
+        || status.includes('no operating')
+    ) {
+        return 'incomplete';
+    }
+
+    if (status.includes('advisory')) return 'advisory';
+    if (status === 'warning' || warnings.length > 0) return 'warning';
+    return 'normal';
+}
+
+function summarizeWarningDetail(detail) {
+    const text = String(detail || '').replace(/\s+/g, ' ').trim();
+    if (text.length <= WARNING_PANEL_DETAIL_MAX_CHARS) return text;
+
+    const slice = text.slice(0, WARNING_PANEL_DETAIL_MAX_CHARS);
+    const sentenceBreak = Math.max(slice.lastIndexOf('.'), slice.lastIndexOf(';'), slice.lastIndexOf('|'));
+    const wordBreak = slice.lastIndexOf(' ');
+    const cutAt = sentenceBreak >= 48 ? sentenceBreak : (wordBreak >= 48 ? wordBreak : WARNING_PANEL_DETAIL_MAX_CHARS);
+    return `${slice.slice(0, cutAt).replace(/[.;|\s]+$/g, '')}...`;
+}
+
+function joinWarningDetails(warnings = [], fallback = '') {
+    const details = warnings.filter(Boolean).map(warning => String(warning).trim()).filter(Boolean);
+    if (fallback) details.push(String(fallback).trim());
+    return Array.from(new Set(details.filter(Boolean))).join(' | ');
+}
+
+function getWarningDisplayText(warning, options = {}) {
+    if (typeof formatWarningForUser === 'function') return formatWarningForUser(warning, options);
+    return String(warning || '').replace(/\s+/g, ' ').trim();
+}
+
+function getWarningDisplayList(warnings = [], options = {}) {
+    if (typeof formatWarningListForUser === 'function') return formatWarningListForUser(warnings, options);
+    return (warnings || []).filter(Boolean).map(warning => getWarningDisplayText(warning, options));
+}
+
+function getEquipmentWarningSummary(nodeId, node) {
+    if (!node || nodeId === 'FLUID' || nodeId === 'SETTINGS' || node.type === 'pipe' || node.type === 'settings') return null;
+
+    if (node.type === 'pump') {
+        const visualStatus = getPumpOperatingVisualStatus(node);
+        if (!['risk', 'warning', 'incomplete'].includes(visualStatus)) return null;
+
+        const results = node.results || {};
+        const details = [];
+        addPumpStatusMetric(details, 'NPSHa', results.npsha, 'm');
+        addPumpStatusMetric(details, 'NPSHr', results.npshr, 'm');
+        addPumpStatusMetric(details, 'Margin', results.npshMargin, 'm');
+        if (results.dominantSuctionLoss && results.dominantSuctionLoss !== '-') {
+            details.push(`Dominant loss: ${results.dominantSuctionLoss}`);
+        }
+
+        const warnings = getPumpOperatingWarnings(node);
+        const fallback = warnings[0] || results.cavitationStatus || results.status || 'Review pump operating results.';
+        const displayWarnings = getWarningDisplayList(warnings);
+        const fullDetail = joinWarningDetails(displayWarnings.length ? displayWarnings : warnings, details.join(' | ') || fallback);
+        const primaryDetail = displayWarnings[0] || details.join(' | ') || fallback;
+
+        return {
+            nodeId,
+            name: node.name || nodeId,
+            type: node.type,
+            status: visualStatus,
+            label: PUMP_OPERATING_STATUS_LABELS[visualStatus] || 'Warning',
+            detail: summarizeWarningDetail(primaryDetail),
+            fullDetail
+        };
+    }
+
+    const status = getGenericWarningStatus(node);
+    if (status === 'normal') return null;
+
+    const warnings = getGenericNodeWarnings(node);
+    return {
+        nodeId,
+        name: node.name || nodeId,
+        type: node.type,
+        status,
+        label: status === 'incomplete' ? 'Incomplete' : (status === 'advisory' ? 'Advisory' : 'Warning'),
+        detail: summarizeWarningDetail(getWarningDisplayText(warnings[0] || node.results?.status || 'Review operating results.')),
+        fullDetail: joinWarningDetails(getWarningDisplayList(warnings), node.results?.status || 'Review operating results.')
+    };
+}
+
+function focusWarningNode(nodeId) {
+    const el = getObjectElement(nodeId);
+    if (!el) return;
+    if (typeof selectNode === 'function') selectNode(nodeId, el);
+    if (typeof requestUserTaskObjectProperties === 'function') requestUserTaskObjectProperties(nodeId);
+    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+}
+
+function getCanvasWarningPanelViewportBounds(canvas, panel) {
+    const margin = CANVAS_WARNING_PANEL_MARGIN;
+    const rect = canvas.getBoundingClientRect?.() || { width: canvas.clientWidth || 0, height: canvas.clientHeight || 0 };
+    const viewportWidth = canvas.clientWidth || rect.width || panel.offsetWidth + (margin * 2);
+    const viewportHeight = canvas.clientHeight || rect.height || panel.offsetHeight + (margin * 2);
+    const panelWidth = panel.offsetWidth || panel.getBoundingClientRect?.().width || 0;
+    const panelHeight = panel.offsetHeight || panel.getBoundingClientRect?.().height || 0;
+    const minLeft = (canvas.scrollLeft || 0) + margin;
+    const minTop = (canvas.scrollTop || 0) + margin;
+
+    return {
+        minLeft,
+        minTop,
+        maxLeft: Math.max(minLeft, (canvas.scrollLeft || 0) + viewportWidth - panelWidth - margin),
+        maxTop: Math.max(minTop, (canvas.scrollTop || 0) + viewportHeight - panelHeight - margin)
+    };
+}
+
+function clampCanvasWarningPanelPosition(left, top) {
+    const canvas = document.getElementById('canvas');
+    const panel = document.getElementById('canvasWarningPanel');
+    if (!canvas || !panel) return { left, top };
+
+    const bounds = getCanvasWarningPanelViewportBounds(canvas, panel);
+
+    return {
+        left: Math.max(bounds.minLeft, Math.min(bounds.maxLeft, left)),
+        top: Math.max(bounds.minTop, Math.min(bounds.maxTop, top))
+    };
+}
+
+function setCanvasWarningPanelPosition(left, top, options = {}) {
+    const panel = document.getElementById('canvasWarningPanel');
+    const canvas = document.getElementById('canvas');
+    if (!panel) return;
+    const position = clampCanvasWarningPanelPosition(left, top);
+    panel.style.left = `${position.left}px`;
+    panel.style.top = `${position.top}px`;
+    panel.style.right = 'auto';
+    panel.style.transform = 'none';
+    if (canvas && options.rememberViewport !== false) {
+        panel.dataset.viewportLeft = `${position.left - (canvas.scrollLeft || 0)}`;
+        panel.dataset.viewportTop = `${position.top - (canvas.scrollTop || 0)}`;
+    }
+}
+
+function keepCanvasWarningPanelInViewport() {
+    const canvas = document.getElementById('canvas');
+    const panel = document.getElementById('canvasWarningPanel');
+    if (!canvas || !panel) return;
+
+    if (panel.dataset.userMoved !== 'true') {
+        positionCanvasWarningPanelDefault();
+        return;
+    }
+
+    const viewportLeft = parseFloat(panel.dataset.viewportLeft);
+    const viewportTop = parseFloat(panel.dataset.viewportTop);
+    const left = (canvas.scrollLeft || 0) + (Number.isFinite(viewportLeft) ? viewportLeft : panel.offsetLeft - (canvas.scrollLeft || 0));
+    const top = (canvas.scrollTop || 0) + (Number.isFinite(viewportTop) ? viewportTop : panel.offsetTop - (canvas.scrollTop || 0));
+    setCanvasWarningPanelPosition(left, top);
+}
+
+function requestCanvasWarningPanelViewportClamp() {
+    if (canvasWarningPanelViewportFrame !== null) return;
+    canvasWarningPanelViewportFrame = requestAnimationFrame(() => {
+        canvasWarningPanelViewportFrame = null;
+        keepCanvasWarningPanelInViewport();
+    });
+}
+
+function positionCanvasWarningPanelDefault() {
+    const canvas = document.getElementById('canvas');
+    const legend = document.querySelector('.canvas-status-legend');
+    const panel = document.getElementById('canvasWarningPanel');
+    if (!canvas || !panel) return;
+
+    if (panel.dataset.userMoved === 'true') {
+        keepCanvasWarningPanelInViewport();
+        return;
+    }
+
+    const margin = CANVAS_WARNING_PANEL_MARGIN;
+    const legendHidden = !legend || window.getComputedStyle(legend).display === 'none';
+    if (legendHidden) {
+        setCanvasWarningPanelPosition((canvas.scrollLeft || 0) + margin, (canvas.scrollTop || 0) + margin);
+        return;
+    }
+
+    const defaultTop = (canvas.scrollTop || 0) + margin + legend.offsetHeight + 10;
+    const defaultLeft = (canvas.scrollLeft || 0) + canvas.clientWidth - panel.offsetWidth - margin;
+    setCanvasWarningPanelPosition(defaultLeft, defaultTop);
+}
+
+function setCanvasWarningPanelCollapsed(collapsed, options = {}) {
+    const panel = document.getElementById('canvasWarningPanel');
+    const list = document.getElementById('canvasWarningList');
+    const toggle = document.getElementById('canvasWarningToggle');
+    if (!panel) return;
+
+    const shouldCollapse = !!collapsed;
+    panel.classList.toggle('canvas-warning-collapsed', shouldCollapse);
+    panel.dataset.collapsed = shouldCollapse ? 'true' : 'false';
+
+    if (list) list.hidden = shouldCollapse;
+    if (toggle) {
+        toggle.textContent = shouldCollapse ? '+' : '-';
+        toggle.title = shouldCollapse ? 'Expand warnings panel' : 'Collapse warnings panel';
+        toggle.setAttribute?.('aria-expanded', shouldCollapse ? 'false' : 'true');
+        toggle.setAttribute?.('aria-label', shouldCollapse ? 'Expand warnings panel' : 'Collapse warnings panel');
+    }
+
+    if (!options.skipClamp) requestCanvasWarningPanelViewportClamp();
+}
+
+function collapseCanvasWarningPanelForModeling() {
+    const panel = document.getElementById('canvasWarningPanel');
+    if (!panel) return;
+    setCanvasWarningPanelCollapsed(true);
+}
+
+function initCanvasWarningPanelWindow() {
+    const panel = document.getElementById('canvasWarningPanel');
+    const header = document.getElementById('canvasWarningHeader');
+    const toggle = document.getElementById('canvasWarningToggle');
+    const canvas = document.getElementById('canvas');
+    if (!panel || !header || !canvas || panel.dataset.windowInitialized === 'true') return;
+
+    header.addEventListener('pointerdown', event => {
+        if (event.target?.closest?.('.canvas-warning-toggle')) return;
+        if (event.button !== undefined && event.button !== 0) return;
+        const startLeft = panel.offsetLeft;
+        const startTop = panel.offsetTop;
+        canvasWarningPanelDragState = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            startLeft,
+            startTop
+        };
+        panel.dataset.userMoved = 'true';
+        header.setPointerCapture?.(event.pointerId);
+        event.stopPropagation();
+        event.preventDefault();
+    });
+
+    header.addEventListener('pointermove', event => {
+        if (!canvasWarningPanelDragState || canvasWarningPanelDragState.pointerId !== event.pointerId) return;
+        const dx = event.clientX - canvasWarningPanelDragState.startX;
+        const dy = event.clientY - canvasWarningPanelDragState.startY;
+        setCanvasWarningPanelPosition(
+            canvasWarningPanelDragState.startLeft + dx,
+            canvasWarningPanelDragState.startTop + dy
+        );
+        event.stopPropagation();
+        event.preventDefault();
+    });
+
+    const stopDrag = event => {
+        if (!canvasWarningPanelDragState || canvasWarningPanelDragState.pointerId !== event.pointerId) return;
+        canvasWarningPanelDragState = null;
+        header.releasePointerCapture?.(event.pointerId);
+        event.stopPropagation();
+    };
+
+    header.addEventListener('pointerup', stopDrag);
+    header.addEventListener('pointercancel', stopDrag);
+    toggle?.addEventListener('click', event => {
+        event.stopPropagation();
+        setCanvasWarningPanelCollapsed(panel.dataset.collapsed !== 'true');
+    });
+    canvas.addEventListener('scroll', requestCanvasWarningPanelViewportClamp, { passive: true });
+    window.addEventListener('resize', requestCanvasWarningPanelViewportClamp);
+    window.addEventListener('orientationchange', requestCanvasWarningPanelViewportClamp);
+
+    setCanvasWarningPanelCollapsed(panel.dataset.collapsed === 'true', { skipClamp: true });
+    panel.dataset.windowInitialized = 'true';
+}
+
+function updateCanvasWarningPanel() {
+    const panel = document.getElementById('canvasWarningPanel');
+    const list = document.getElementById('canvasWarningList');
+    const count = document.getElementById('canvasWarningCount');
+    if (!panel || !list || !count) return;
+
+    const summaries = Object.entries(globalModel)
+        .map(([nodeId, node]) => getEquipmentWarningSummary(nodeId, node))
+        .filter(Boolean)
+        .sort((a, b) => {
+            const priorityDiff = WARNING_PANEL_STATUS_PRIORITY[a.status] - WARNING_PANEL_STATUS_PRIORITY[b.status];
+            if (priorityDiff !== 0) return priorityDiff;
+            return a.name.localeCompare(b.name);
+        });
+
+    count.textContent = String(summaries.length);
+    panel.classList.toggle('has-warnings', summaries.length > 0);
+    list.replaceChildren();
+
+    if (summaries.length === 0) {
+        panel.hidden = true;
+        return;
+    }
+
+    panel.hidden = false;
+    initCanvasWarningPanelWindow();
+    setCanvasWarningPanelCollapsed(panel.dataset.collapsed === 'true', { skipClamp: true });
+    summaries.forEach(summary => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = `canvas-warning-item canvas-warning-item-${summary.status}`;
+        item.dataset.nodeId = summary.nodeId;
+
+        const title = document.createElement('span');
+        title.className = 'canvas-warning-item-title';
+        title.textContent = `${summary.name} - ${summary.label}`;
+
+        const detail = document.createElement('span');
+        detail.className = 'canvas-warning-item-detail';
+        detail.textContent = summary.detail;
+        if (summary.fullDetail) {
+            detail.title = summary.fullDetail;
+            item.title = summary.fullDetail;
+            item.dataset.fullDetail = summary.fullDetail;
+        }
+
+        item.append(title, detail);
+        item.addEventListener('click', event => {
+            event.stopPropagation();
+            focusWarningNode(summary.nodeId);
+        });
+        list.appendChild(item);
+    });
 }
 
 function updateObjectOperatingStatusVisual(nodeId) {
@@ -49,18 +1184,89 @@ function updateObjectOperatingStatusVisual(nodeId) {
     const el = getObjectElement(nodeId);
     if (!node || !el) return;
 
-    const hasWarning = hasPumpOperatingWarning(node);
-    el.classList.toggle('pump-status-warning', hasWarning);
+    const visualStatus = getPumpOperatingVisualStatus(node);
+    PUMP_OPERATING_STATUS_CLASSES.forEach(className => el.classList.remove(className));
     if (node.type === 'pump') {
-        el.dataset.operatingStatus = hasWarning ? 'warning' : 'normal';
-        el.title = hasWarning
-            ? `Pump warning: ${(node.results?.warnings || []).join(' | ') || node.results?.status || 'Review operating results'}`
-            : '';
+        if (visualStatus !== 'normal') {
+            el.classList.add(`pump-status-${visualStatus}`);
+        }
+        el.dataset.operatingStatus = visualStatus;
+        el.title = getPumpOperatingStatusTooltip(node, visualStatus);
+        updatePumpStatusBadge(el, visualStatus);
+        updatePumpLiveParameterPanel(el, node, visualStatus);
+        return;
     }
+
+    if (node.type === 'sink') {
+        const sinkVisualStatus = getSinkOperatingVisualStatus(node);
+        el.dataset.operatingStatus = sinkVisualStatus;
+        el.title = getSinkOperatingStatusTooltip(nodeId, node, sinkVisualStatus);
+        updateSinkLiveParameterPanel(el, nodeId, node, sinkVisualStatus);
+        return;
+    }
+
+    if (node.type === 'source') {
+        const sourceVisualStatus = getSourceOperatingVisualStatus(nodeId, node);
+        el.dataset.operatingStatus = sourceVisualStatus;
+        el.title = getSourceOperatingStatusTooltip(nodeId, node, sourceVisualStatus);
+        updateSourceLiveParameterPanel(el, nodeId, node, sourceVisualStatus);
+        return;
+    }
+
+    if (node.type === 'tank') {
+        const tankVisualStatus = getTankOperatingVisualStatus(node);
+        el.dataset.operatingStatus = tankVisualStatus;
+        el.title = getTankOperatingStatusTooltip(nodeId, node, tankVisualStatus);
+        updateTankLiveParameterPanel(el, nodeId, node, tankVisualStatus);
+        return;
+    }
+
+    delete el.dataset.operatingStatus;
+    el.title = '';
 }
 
 function updateAllObjectOperatingStatusVisuals() {
     Object.keys(globalModel).forEach(updateObjectOperatingStatusVisual);
+    updateCanvasWarningPanel();
+}
+
+function updateSourceTypeFromContextMenu(sourceId, sourceType) {
+    const source = globalModel[sourceId];
+    if (!source || source.type !== 'source' || !sourceType) return null;
+    const sourceTypeChanged = source.props?.sourceType !== sourceType;
+
+    if (sourceTypeChanged && typeof captureState === 'function') captureState();
+    if (!source.props) source.props = {};
+    source.props.sourceType = sourceType;
+
+    if (sourceTypeChanged && typeof reconcileSourceBoundaryConfiguration === 'function') {
+        reconcileSourceBoundaryConfiguration(sourceId, { detachInvalidAttachment: true });
+    }
+    if (typeof normalizeSourceProps === 'function') {
+        normalizeSourceProps(source);
+    }
+    if (typeof syncSourceFlowFromInputMode === 'function') {
+        syncSourceFlowFromInputMode(sourceId);
+    }
+    if (typeof drawConnections === 'function') drawConnections();
+    if (typeof renderSidebar === 'function') renderSidebar(sourceId);
+    if (typeof updateSimulation === 'function') updateSimulation({ renderSidebarAfter: false });
+    return source;
+}
+
+function startSourceTypeActionFromContextMenu(sourceId, sourceType, e) {
+    const source = updateSourceTypeFromContextMenu(sourceId, sourceType);
+    if (!source) return;
+
+    if (typeof isSourceTypeSemanticAttachmentCapable === 'function'
+        ? isSourceTypeSemanticAttachmentCapable(source)
+        : sourceType === 'Open Tank / Reservoir' || sourceType === 'Pressurized Vessel') {
+        setAppMode('CONNECT');
+        startSourceAttachment(sourceId, e);
+        return;
+    }
+
+    startHydraulicConnectionFromSource(sourceId, e);
 }
 
 function setAppMode(mode) {
@@ -69,17 +1275,24 @@ function setAppMode(mode) {
     const btnSelect = document.getElementById('btn-mode-select');
     const btnConnect = document.getElementById('btn-mode-connect');
     const canvas = document.getElementById('canvas');
+    const connectHint = document.getElementById('canvasConnectHint');
 
     if (btnSelect && btnConnect) {
         btnSelect.classList.toggle('active', mode === 'SELECT');
         btnConnect.classList.toggle('active', mode === 'CONNECT');
+        btnSelect.setAttribute('aria-pressed', mode === 'SELECT' ? 'true' : 'false');
+        btnConnect.setAttribute('aria-pressed', mode === 'CONNECT' ? 'true' : 'false');
     }
 
     if (canvas) {
         canvas.classList.toggle('connect-mode', mode === 'CONNECT');
     }
+    if (connectHint) {
+        connectHint.hidden = mode !== 'CONNECT';
+    }
 
     if (mode !== 'CONNECT' && pendingConnectionStart) cancelPendingConnection();
+    if (typeof updateCanvasSelectionActions === 'function') updateCanvasSelectionActions();
 }
 
 function activateConnectTool(routeStyle = 'Straight') {
@@ -120,6 +1333,7 @@ function getObjectPortsHtml(type) {
 
     if (type === 'tank') {
         return `
+            <div class="instrument-anchor level-anchor" data-anchor="level" title="Level instrument signal tap"></div>
             <div class="port inlet" style="top: 50%; left: 6%; transform: translate(-50%, -50%);"></div>
             <div class="port outlet" style="top: 50%; right: 6%; transform: translate(50%, -50%); background: #ff0;"></div>
         `;
@@ -127,6 +1341,7 @@ function getObjectPortsHtml(type) {
 
     if (type === 'separator') {
         return `
+            <div class="instrument-anchor level-anchor" data-anchor="level" title="Level instrument signal tap"></div>
             <div class="port inlet" style="top: 50%; left: 0; transform: translate(-50%, -50%);"></div>
             <div class="port outlet" style="top: 50%; right: 0; transform: translate(50%, -50%); background: #ff0;"></div>
         `;
@@ -134,6 +1349,7 @@ function getObjectPortsHtml(type) {
 
     if (type === 'verticalVessel') {
         return `
+            <div class="instrument-anchor level-anchor" data-anchor="level" title="Level instrument signal tap"></div>
             <div class="port inlet" style="top: 28%; left: 0; transform: translate(-50%, -50%);"></div>
             <div class="port outlet" style="top: 58%; right: 0; transform: translate(50%, -50%); background: #ff0;"></div>
         `;
@@ -175,6 +1391,9 @@ function getObjectClassName(type) {
 }
 
 function getLineMonitorReadoutMarkup() {
+    const pressureUnit = typeof getDisplayUnit === 'function' ? getDisplayUnit('pressureAbs') : 'bar a';
+    const temperatureUnit = typeof getDisplayUnit === 'function' ? getDisplayUnit('temperature') : 'deg C';
+    const flowUnit = typeof getDisplayUnit === 'function' ? getDisplayUnit('flow') : 'm3/h';
     return `
         <div class="line-monitor-readout" aria-label="PTF pipeline readout">
             <table>
@@ -182,17 +1401,17 @@ function getLineMonitorReadoutMarkup() {
                     <tr>
                         <th scope="row">P</th>
                         <td data-readout-key="pressure">-</td>
-                        <td>bar a</td>
+                        <td data-readout-unit="pressure">${escapeObjectMarkup(pressureUnit)}</td>
                     </tr>
                     <tr>
                         <th scope="row">T</th>
                         <td data-readout-key="temperature">-</td>
-                        <td>deg C</td>
+                        <td data-readout-unit="temperature">${escapeObjectMarkup(temperatureUnit)}</td>
                     </tr>
                     <tr>
                         <th scope="row">F</th>
                         <td data-readout-key="flow">-</td>
-                        <td>m3/h</td>
+                        <td data-readout-unit="flow">${escapeObjectMarkup(flowUnit)}</td>
                     </tr>
                 </tbody>
             </table>
@@ -218,16 +1437,181 @@ function escapeObjectMarkup(value) {
     }[char]));
 }
 
+function getToolbarObjectMenuItems(menu = document.getElementById('toolbarObjectMenu')) {
+    return Array.from(menu?.querySelectorAll('.toolbar-object-menu-item') || []);
+}
+
+function focusToolbarObjectMenuItem(menu, index) {
+    const items = getToolbarObjectMenuItems(menu);
+    if (!items.length) return;
+    const normalizedIndex = ((index % items.length) + items.length) % items.length;
+    items[normalizedIndex].focus();
+}
+
+function setToolbarObjectMenuOpen(open, options = {}) {
+    const container = document.getElementById('toolbarObjectMenuContainer');
+    const button = document.getElementById('toolbarObjectMenuButton');
+    const menu = document.getElementById('toolbarObjectMenu');
+    if (!container || !button || !menu) return;
+
+    container.classList.toggle('is-open', !!open);
+    menu.hidden = !open;
+    button.setAttribute('aria-expanded', open ? 'true' : 'false');
+
+    if (!open && options.focusButton) {
+        button.focus();
+    }
+}
+
+function closeToolbarObjectMenu(options = {}) {
+    setToolbarObjectMenuOpen(false, options);
+}
+
+function addToolbarObjectFromMenu(item) {
+    closeToolbarObjectMenu();
+    if (!item) return;
+
+    if (item.action === 'connect') {
+        activateConnectTool(item.routeStyle || 'Straight');
+        return;
+    }
+
+    addEquipment(item.type, null, { placementMode: 'ribbon-click' });
+}
+
+function renderToolbarObjectMenu() {
+    const container = document.getElementById('toolbarObjectMenuContainer');
+    const button = document.getElementById('toolbarObjectMenuButton');
+    const menu = document.getElementById('toolbarObjectMenu');
+    const groups = window.TOOLBAR_GROUPS || [];
+    if (!container || !button || !menu || !groups.length) return;
+
+    menu.innerHTML = '';
+    groups.forEach(group => {
+        const section = document.createElement('section');
+        section.className = 'toolbar-object-menu-section';
+
+        const title = document.createElement('div');
+        title.className = 'toolbar-object-menu-title';
+        title.textContent = group.label;
+        section.appendChild(title);
+
+        const grid = document.createElement('div');
+        grid.className = 'toolbar-object-menu-grid';
+
+        group.items.forEach(item => {
+            const itemButton = document.createElement('button');
+            itemButton.type = 'button';
+            itemButton.className = 'toolbar-object-menu-item';
+            itemButton.setAttribute('role', 'menuitem');
+            itemButton.setAttribute('aria-label', `Add ${item.label}`);
+            itemButton.innerHTML = `
+                <img src="${item.icon}" alt="">
+                <span>${escapeObjectMarkup(item.label)}</span>
+            `;
+            itemButton.addEventListener('click', () => addToolbarObjectFromMenu(item));
+            grid.appendChild(itemButton);
+        });
+
+        section.appendChild(grid);
+        menu.appendChild(section);
+    });
+
+    if (container.dataset.bound === 'true') return;
+    container.dataset.bound = 'true';
+
+    button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const willOpen = menu.hidden;
+        setToolbarObjectMenuOpen(willOpen);
+        if (willOpen) {
+            focusToolbarObjectMenuItem(menu, 0);
+        }
+    });
+
+    button.addEventListener('keydown', event => {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+        event.preventDefault();
+        setToolbarObjectMenuOpen(true);
+        const items = getToolbarObjectMenuItems(menu);
+        focusToolbarObjectMenuItem(menu, event.key === 'ArrowUp' ? items.length - 1 : 0);
+    });
+
+    menu.addEventListener('keydown', event => {
+        const items = getToolbarObjectMenuItems(menu);
+        const currentIndex = items.indexOf(document.activeElement);
+
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeToolbarObjectMenu({ focusButton: true });
+            return;
+        }
+
+        if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            focusToolbarObjectMenuItem(menu, currentIndex + 1);
+            return;
+        }
+
+        if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+            event.preventDefault();
+            focusToolbarObjectMenuItem(menu, currentIndex - 1);
+            return;
+        }
+
+        if (event.key === 'Home') {
+            event.preventDefault();
+            focusToolbarObjectMenuItem(menu, 0);
+            return;
+        }
+
+        if (event.key === 'End') {
+            event.preventDefault();
+            focusToolbarObjectMenuItem(menu, items.length - 1);
+        }
+    });
+
+    container.addEventListener('click', event => event.stopPropagation());
+
+    document.addEventListener('click', event => {
+        if (!event.target.closest?.('#toolbarObjectMenuContainer')) closeToolbarObjectMenu();
+    });
+
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeToolbarObjectMenu();
+    });
+}
+
 function getObjectMarkup(type, nodeId, desc) {
     const safeNodeId = escapeObjectMarkup(nodeId);
     const safeDesc = escapeObjectMarkup(desc);
+    const statusBadge = type === 'pump'
+        ? '<div class="pump-status-badge" hidden></div>'
+        : '';
+    const pumpLivePanel = type === 'pump'
+        ? '<div class="pump-live-params" aria-label="Live pump parameters"></div>'
+        : '';
+    const sourceLivePanel = type === 'source'
+        ? '<div class="source-live-params" aria-label="Live SRC boundary parameters"></div>'
+        : '';
+    const sinkLivePanel = type === 'sink'
+        ? '<div class="sink-live-params" aria-label="Live SNK boundary parameters"></div>'
+        : '';
+    const tankLivePanel = type === 'tank'
+        ? '<div class="tank-live-params" aria-label="Live tank boundary and inventory parameters"></div>'
+        : '';
 
     return `
         <div class="object-icon">
             <img class="pfd-icon-img" src="${getObjectIconPath(type)}" alt="">
             ${getObjectPortsHtml(type)}
         </div>
+        ${statusBadge}
         <div class="object-name">${safeNodeId}<br><span class="object-desc">${safeDesc}</span></div>
+        ${pumpLivePanel}
+        ${sourceLivePanel}
+        ${sinkLivePanel}
+        ${tankLivePanel}
         ${type === 'lineMonitor' ? getLineMonitorReadoutMarkup() : ''}
     `;
 }
@@ -255,6 +1639,8 @@ function renderToolbarPalette() {
             btn.type = 'button';
             btn.className = 'toolbar-tool';
             btn.title = item.label;
+            btn.draggable = false;
+            btn.setAttribute('aria-label', `Add ${item.label}`);
 
             btn.innerHTML = `
                 <img class="toolbar-tool-icon" src="${item.icon}" alt="">
@@ -262,12 +1648,22 @@ function renderToolbarPalette() {
             `;
 
             btn.addEventListener('click', () => {
+                if (btn.dataset.skipNextClick === 'true') {
+                    delete btn.dataset.skipNextClick;
+                    return;
+                }
+
                 if (item.action === 'connect') {
                     activateConnectTool(item.routeStyle || 'Straight');
                 } else {
-                    addEquipment(item.type);
+                    addEquipment(item.type, null, { placementMode: 'ribbon-click' });
                 }
             });
+
+            if (item.action !== 'connect' && item.type) {
+                btn.classList.add('toolbar-tool-draggable');
+                attachToolbarDrag(btn, item);
+            }
 
             tools.appendChild(btn);
         });
@@ -275,17 +1671,176 @@ function renderToolbarPalette() {
         groupEl.appendChild(tools);
         palette.appendChild(groupEl);
     });
+
+    renderToolbarObjectMenu();
 }
 function selectNode(nodeId, element) {
+    if (nodeId === 'FLUID' && typeof openFluidBasisTaskWindow === 'function') {
+        document.querySelectorAll('.pfd-object').forEach(el => el.classList.remove('selected'));
+        currentSelectedNode = null;
+        if (typeof updateCanvasSelectionActions === 'function') updateCanvasSelectionActions();
+        openFluidBasisTaskWindow();
+        return;
+    }
+
     // Clear previous selection
     document.querySelectorAll('.pfd-object').forEach(el => el.classList.remove('selected'));
     // Set new selection
     if (element) element.classList.add('selected');
     currentSelectedNode = nodeId;
     renderSidebar(nodeId);
-    
-    // Show editor hint if it's the pump
-    document.getElementById('editorHint').style.display = (globalModel[nodeId]?.type === 'pump') ? 'block' : 'none';
+    if (typeof updateCanvasSelectionActions === 'function') updateCanvasSelectionActions();
+}
+
+function requestUserTaskObjectProperties(nodeId) {
+    const node = globalModel?.[nodeId];
+    if (!node || node.type === 'fluid') return;
+
+    if (node.type === 'pipe' && typeof requestPipePropertiesTaskWindowOpen === 'function') {
+        requestPipePropertiesTaskWindowOpen(nodeId);
+    } else if (node.type === 'tank' && typeof requestTankPropertiesTaskWindowOpen === 'function') {
+        requestTankPropertiesTaskWindowOpen(nodeId);
+    } else if (typeof requestObjectPropertiesTaskWindowOpen === 'function') {
+        requestObjectPropertiesTaskWindowOpen(nodeId);
+    }
+
+    const element = typeof getObjectElement === 'function' ? getObjectElement(nodeId) : null;
+    selectNode(nodeId, element);
+}
+
+function createUserTaskObjectPropertiesMenuItem(nodeId) {
+    const node = globalModel?.[nodeId];
+    if (!node || node.type === 'fluid') return null;
+
+    return {
+        label: 'User Task Object Properties',
+        action: () => requestUserTaskObjectProperties(nodeId)
+    };
+}
+
+function getCanvasSelectionNodeLabel(nodeId, node) {
+    const name = node?.name || nodeId || '';
+    const type = node?.type ? ` (${getDefaultDescription(node.type) || node.type})` : '';
+    return `${name}${type}`;
+}
+
+function getSelectedObjectPrimaryAction(nodeId, node) {
+    if (!node || node.type === 'fluid' || node.type === 'pipe') return null;
+    const element = getObjectElement(nodeId);
+    if (!element) return null;
+
+    if (node.type === 'source') {
+        const canAttach = typeof isSourceTypeSemanticAttachmentCapable === 'function'
+            ? isSourceTypeSemanticAttachmentCapable(node)
+            : shouldSourcePortStartSemanticAttachment(node);
+        if (canAttach) {
+            return {
+                type: 'source-attach',
+                label: 'Attach Tank/Vessel',
+                title: 'Create a dashed semantic attachment to a tank or vessel. This is not a hydraulic pipe.'
+            };
+        }
+        return {
+            type: 'source-pipe',
+            label: 'Start Pipe',
+            title: 'Start a solid hydraulic pipe from this source boundary.'
+        };
+    }
+
+    if (isInstrumentType(node.type)) {
+        if (isCanvasLevelMeasurementInstrument(node)) {
+            return {
+                type: 'instrument-level',
+                label: 'Attach Level',
+                title: 'Attach this LIC/level instrument to a tank or vessel level.'
+            };
+        }
+        return {
+            type: 'instrument-pipe',
+            label: 'Connect Instrument',
+            title: 'Connect this instrument to a pipeline as a measurement tap.'
+        };
+    }
+
+    if (element.querySelector('.port')) {
+        return {
+            type: 'object-pipe',
+            label: 'Start Pipe',
+            title: 'Start a solid hydraulic pipe from this object.'
+        };
+    }
+
+    return null;
+}
+
+function initCanvasSelectionActions() {
+    const actions = document.getElementById('canvasSelectionActions');
+    if (actions) actions.hidden = true;
+}
+
+function updateCanvasSelectionActions() {
+    const actions = document.getElementById('canvasSelectionActions');
+    if (actions) actions.hidden = true;
+}
+
+function runCanvasSelectionPrimaryAction(nodeId) {
+    const node = globalModel?.[nodeId];
+    const action = getSelectedObjectPrimaryAction(nodeId, node);
+    if (!action) return;
+
+    if (action.type === 'source-attach') {
+        setAppMode('CONNECT');
+        startSourceAttachment(nodeId);
+        return;
+    }
+
+    if (action.type === 'source-pipe') {
+        startHydraulicConnectionFromSource(nodeId);
+        return;
+    }
+
+    if (action.type === 'instrument-level') {
+        setAppMode('CONNECT');
+        startInstrumentAttachment(nodeId, null, { attachMode: 'level' });
+        return;
+    }
+
+    if (action.type === 'instrument-pipe') {
+        setAppMode('CONNECT');
+        startInstrumentAttachment(nodeId, null, { attachMode: 'pipe' });
+        return;
+    }
+
+    if (action.type === 'object-pipe') {
+        startHydraulicConnectionFromObject(nodeId);
+    }
+}
+
+function getDefaultHydraulicPortElement(nodeId, isStart = true) {
+    const element = getObjectElement(nodeId);
+    if (!element) return null;
+    return isStart
+        ? element.querySelector('.port.outlet') || element.querySelector('.port.inlet')
+        : element.querySelector('.port.inlet') || element.querySelector('.port.outlet');
+}
+
+function startHydraulicConnectionFromObject(nodeId) {
+    const port = getDefaultHydraulicPortElement(nodeId, true);
+    if (!port) return;
+
+    const rect = port.getBoundingClientRect();
+    setAppMode('CONNECT');
+    port.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2
+    }));
+}
+
+function addUserTaskObjectPropertiesMenuItem(items, nodeId) {
+    const userTaskItem = createUserTaskObjectPropertiesMenuItem(nodeId);
+    if (userTaskItem) items.unshift(userTaskItem);
+    return items;
 }
 
 function getObjectElement(id) {
@@ -300,12 +1855,296 @@ function getClientPoint(e) {
 
 function getCanvasPointFromEvent(e) {
     const point = getClientPoint(e);
+    return getCanvasPointFromClient(point.clientX, point.clientY);
+}
+
+function getCanvasPointFromClient(clientX, clientY) {
     const canvas = document.getElementById('canvas');
     const canvasRect = canvas.getBoundingClientRect();
     return {
-        x: point.clientX - canvasRect.left + canvas.scrollLeft,
-        y: point.clientY - canvasRect.top + canvas.scrollTop
+        x: clientX - canvasRect.left + canvas.scrollLeft,
+        y: clientY - canvasRect.top + canvas.scrollTop
     };
+}
+
+function isPointInsideElement(clientX, clientY, element) {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    return (
+        clientX >= rect.left
+        && clientX <= rect.right
+        && clientY >= rect.top
+        && clientY <= rect.bottom
+    );
+}
+
+function getToolbarPlacementOffset(type) {
+    if (isVisualResizableType(type)) {
+        const baseSize = VISUAL_OBJECT_BASE_SIZES[type];
+        return { x: baseSize.width / 2, y: baseSize.height / 2 };
+    }
+
+    if (isInstrumentType(type)) return { x: 18, y: 18 };
+    return { x: 28, y: 26 };
+}
+
+function getToolbarObjectLayoutSize(type) {
+    if (isVisualResizableType(type)) {
+        const baseSize = VISUAL_OBJECT_BASE_SIZES[type];
+        return { width: baseSize.width, height: baseSize.height };
+    }
+
+    if (isInstrumentType(type)) return { width: 38, height: 38 };
+    return { width: 56, height: 52 };
+}
+
+function getRibbonClickPlacementStep(type) {
+    const footprintWidth = getToolbarLivePanelFootprintWidth(type);
+    return Math.max(
+        RIBBON_CLICK_MIN_STEP_PX,
+        getToolbarObjectLayoutSize(type).width + RIBBON_CLICK_OBJECT_GAP_PX,
+        footprintWidth + RIBBON_CLICK_LIVE_PANEL_GAP_PX
+    );
+}
+
+function getToolbarLivePanelFootprintWidth(type) {
+    if (type === 'pump') return 248;
+    if (type === 'tank') return 230;
+    if (type === 'source' || type === 'sink') return 232;
+    if (isInstrumentType(type)) return 72;
+    if (isVisualResizableType(type)) return Math.max(180, getToolbarObjectLayoutSize(type).width);
+    return 160;
+}
+
+function getRibbonInitialCenter(type, canvas, rect) {
+    const footprintHalf = getToolbarLivePanelFootprintWidth(type) / 2;
+    return {
+        x: (canvas.scrollLeft || 0) + Math.max(footprintHalf + 18, Math.min(rect.width * 0.2, rect.width / 2)),
+        y: (canvas.scrollTop || 0) + Math.max(128, Math.min(rect.height * 0.46, rect.height - 126))
+    };
+}
+
+function getCanvasObjectElements() {
+    const canvas = document.getElementById('canvas');
+    if (!canvas) return [];
+    return Array.from(canvas.querySelectorAll('.pfd-object'));
+}
+
+function getRightmostCanvasObjectPlacement() {
+    const objects = getCanvasObjectElements();
+    let rightmost = null;
+
+    objects.forEach(element => {
+        const left = parseFloat(element.style.left) || 0;
+        const top = parseFloat(element.style.top) || 0;
+        const width = element.offsetWidth || getToolbarObjectLayoutSize(element.dataset.type).width;
+        const height = element.offsetHeight || getToolbarObjectLayoutSize(element.dataset.type).height;
+        const right = left + width;
+
+        if (!rightmost || right > rightmost.right) {
+            rightmost = {
+                right,
+                centerY: top + height / 2
+            };
+        }
+    });
+
+    return rightmost;
+}
+
+function getRibbonClickCanvasPlacement(type) {
+    const canvas = document.getElementById('canvas');
+    const rect = canvas.getBoundingClientRect();
+    const offset = getToolbarPlacementOffset(type);
+    const size = getToolbarObjectLayoutSize(type);
+    const footprintHalf = Math.max(size.width, getToolbarLivePanelFootprintWidth(type)) / 2;
+    const existingObjects = getCanvasObjectElements();
+    const initialCenter = getRibbonInitialCenter(type, canvas, rect);
+    let centerX;
+    let centerY;
+    let rowIndex = 0;
+
+    if (existingObjects.length === 0) {
+        centerX = initialCenter.x;
+        centerY = initialCenter.y;
+    } else if (ribbonClickPlacementState) {
+        centerX = ribbonClickPlacementState.nextCenterX;
+        centerY = ribbonClickPlacementState.centerY;
+        rowIndex = ribbonClickPlacementState.rowIndex || 0;
+        const viewportRight = (canvas.scrollLeft || 0) + rect.width - 24;
+        if (centerX + footprintHalf > viewportRight) {
+            rowIndex += 1;
+            centerX = initialCenter.x;
+            centerY = (ribbonClickPlacementState.baseCenterY || initialCenter.y) + rowIndex * RIBBON_CLICK_ROW_STEP_PX;
+        }
+    } else {
+        const rightmost = getRightmostCanvasObjectPlacement();
+        centerX = (rightmost?.right || initialCenter.x) + RIBBON_CLICK_OBJECT_GAP_PX + footprintHalf;
+        centerY = rightmost?.centerY || initialCenter.y;
+    }
+
+    const placement = normalizeCanvasPlacement({
+        left: centerX - offset.x,
+        top: centerY - offset.y
+    });
+
+    ribbonClickPlacementState = {
+        baseCenterY: ribbonClickPlacementState?.baseCenterY || initialCenter.y,
+        centerY,
+        rowIndex,
+        nextCenterX: centerX + getRibbonClickPlacementStep(type)
+    };
+
+    return placement;
+}
+
+function getDefaultCanvasPlacement(type) {
+    const canvas = document.getElementById('canvas');
+    const rect = canvas.getBoundingClientRect();
+    const offset = getToolbarPlacementOffset(type);
+
+    return {
+        left: canvas.scrollLeft + rect.width / 2 - offset.x,
+        top: canvas.scrollTop + rect.height / 2 - offset.y
+    };
+}
+
+function getCanvasDropPlacement(e, type) {
+    const point = getCanvasPointFromClient(e.clientX, e.clientY);
+    const offset = getToolbarPlacementOffset(type);
+
+    return {
+        left: point.x - offset.x,
+        top: point.y - offset.y
+    };
+}
+
+function normalizeCanvasPlacement(placement) {
+    return {
+        left: Math.max(0, parseFloat(placement.left) || 0),
+        top: Math.max(0, parseFloat(placement.top) || 0)
+    };
+}
+
+function minimizeObjectTaskWindowAfterEquipmentAdd(nodeId) {
+    const taskWindow = document.getElementById('taskWindow');
+    if (!taskWindow || taskWindow.hidden || taskWindow.dataset.nodeId !== nodeId) return;
+    if (!['pipe', 'tank', 'object'].includes(taskWindow.dataset.kind)) return;
+    if (typeof minimizeTaskWindow === 'function') minimizeTaskWindow();
+}
+
+function setToolbarDropActive(active) {
+    const canvas = document.getElementById('canvas');
+    if (canvas) canvas.classList.toggle('toolbar-drop-active', active);
+}
+
+function createToolbarDragGhost(item) {
+    const ghost = document.createElement('div');
+    ghost.className = 'toolbar-drag-ghost';
+
+    const img = document.createElement('img');
+    img.src = item.icon;
+    img.alt = '';
+
+    const label = document.createElement('span');
+    label.textContent = item.label;
+
+    ghost.append(img, label);
+    document.body.appendChild(ghost);
+    return ghost;
+}
+
+function updateToolbarDragGhost(state, e) {
+    if (!state.ghost) return;
+    state.ghost.style.left = `${e.clientX + 14}px`;
+    state.ghost.style.top = `${e.clientY + 14}px`;
+}
+
+function finishToolbarDrag() {
+    if (!toolbarDragState) return;
+
+    const { button, pointerId, moveHandler, upHandler, ghost } = toolbarDragState;
+    document.removeEventListener('pointermove', moveHandler);
+    document.removeEventListener('pointerup', upHandler);
+    document.removeEventListener('pointercancel', upHandler);
+    button.releasePointerCapture?.(pointerId);
+    button.classList.remove('is-dragging');
+    document.body.classList.remove('toolbar-dragging');
+    setToolbarDropActive(false);
+
+    if (ghost) ghost.remove();
+    toolbarDragState = null;
+}
+
+function attachToolbarDrag(button, item) {
+    button.addEventListener('dragstart', event => event.preventDefault());
+
+    button.addEventListener('pointerdown', event => {
+        if (event.button !== undefined && event.button !== 0) return;
+
+        const pointerId = event.pointerId;
+        const state = {
+            button,
+            item,
+            pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            isDragging: false,
+            ghost: null,
+            moveHandler: null,
+            upHandler: null
+        };
+
+        const onMove = moveEvent => {
+            if (moveEvent.pointerId !== pointerId) return;
+
+            const dx = moveEvent.clientX - state.startX;
+            const dy = moveEvent.clientY - state.startY;
+
+            if (!state.isDragging && Math.hypot(dx, dy) >= TOOLBAR_DRAG_THRESHOLD_PX) {
+                state.isDragging = true;
+                state.ghost = createToolbarDragGhost(item);
+                button.classList.add('is-dragging');
+                document.body.classList.add('toolbar-dragging');
+            }
+
+            if (state.isDragging) {
+                const canvas = document.getElementById('canvas');
+                updateToolbarDragGhost(state, moveEvent);
+                setToolbarDropActive(isPointInsideElement(moveEvent.clientX, moveEvent.clientY, canvas));
+                moveEvent.preventDefault();
+            }
+        };
+
+        const onEnd = upEvent => {
+            if (upEvent.pointerId !== pointerId) return;
+
+            if (state.isDragging) {
+                const canvas = document.getElementById('canvas');
+                button.dataset.skipNextClick = 'true';
+                window.setTimeout(() => {
+                    if (button.dataset.skipNextClick === 'true') {
+                        delete button.dataset.skipNextClick;
+                    }
+                }, 0);
+                if (isPointInsideElement(upEvent.clientX, upEvent.clientY, canvas)) {
+                    addEquipment(item.type, getCanvasDropPlacement(upEvent, item.type));
+                }
+                upEvent.preventDefault();
+            }
+
+            finishToolbarDrag();
+        };
+
+        state.moveHandler = onMove;
+        state.upHandler = onEnd;
+        toolbarDragState = state;
+
+        button.setPointerCapture?.(pointerId);
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onEnd);
+        document.addEventListener('pointercancel', onEnd);
+    });
 }
 
 function isCanvasBackgroundTarget(target) {
@@ -314,6 +2153,44 @@ function isCanvasBackgroundTarget(target) {
         || target.id === 'svg-lines'
         || target.classList?.contains('pfd-lines')
     ));
+}
+
+function shouldSourcePortStartSemanticAttachment(source) {
+    const type = source?.props?.sourceType || 'Standalone Boundary Source';
+    return type === 'Open Tank / Reservoir' || type === 'Pressurized Vessel';
+}
+
+function startHydraulicConnectionFromSource(sourceId, e = null) {
+    const source = globalModel[sourceId];
+    if (!source || source.type !== 'source') return;
+
+    const portSelector = '.port.outlet';
+    const startPoint = getPortPosition(sourceId, portSelector) || getObjectCenterPosition(sourceId);
+    if (!startPoint) return;
+
+    if (pendingConnectionStart) cancelPendingConnection(false);
+    setAppMode('CONNECT');
+    collapseCanvasWarningPanelForModeling();
+
+    const currentPoint = e ? getCanvasPointFromEvent(e) : { x: startPoint.x + 96, y: startPoint.y };
+    pendingConnectionStart = {
+        kind: 'pipe',
+        id: sourceId,
+        portSelector,
+        routeStyle: nextPipeRouteStyle,
+        currentX: currentPoint.x,
+        currentY: currentPoint.y
+    };
+
+    onCanvasMouseMove = (ev) => {
+        const point = getCanvasPointFromEvent(ev);
+        pendingConnectionStart.currentX = point.x;
+        pendingConnectionStart.currentY = point.y;
+        drawConnections();
+    };
+
+    document.addEventListener('pointermove', onCanvasMouseMove);
+    drawConnections();
 }
 
 function makeDraggable(obj) {
@@ -394,14 +2271,19 @@ function makeDraggable(obj) {
     
     // Double click for Pump chart
     if (obj.dataset.id.startsWith('P-')) {
-        obj.addEventListener('dblclick', () => {
+        obj.addEventListener('dblclick', async () => {
             if (appMode !== 'CONNECT') {
                 activeChartPumpId = obj.dataset.id;
                 document.getElementById('fullEditor').style.display = 'flex';
                 selectNode(obj.dataset.id, obj);
                 updateSimulation();
-                updatePumpChart(activeChartPumpId);
-                if (pumpChartInstance) pumpChartInstance.resize();
+                try {
+                    if (typeof ensurePumpChartReady === 'function') await ensurePumpChartReady();
+                    updatePumpChart(activeChartPumpId);
+                    if (pumpChartInstance) pumpChartInstance.resize();
+                } catch (error) {
+                    console.error(error);
+                }
             }
         });
     }
@@ -428,7 +2310,7 @@ function makeDraggable(obj) {
                     return;
                 }
 
-                if (node && node.type === 'source') {
+                if (node && node.type === 'source' && shouldSourcePortStartSemanticAttachment(node)) {
                     startSourceAttachment(nodeId, e);
                     return;
                 }
@@ -437,6 +2319,7 @@ function makeDraggable(obj) {
                  
                 if (!pendingConnectionStart) {
                     // start
+                    collapseCanvasWarningPanelForModeling();
                     const point = getCanvasPointFromEvent(e);
                     pendingConnectionStart = { 
                         kind: 'pipe',
@@ -471,6 +2354,7 @@ function makeDraggable(obj) {
                         if (((fromType === 'valve' && toType === 'pump') || (fromType === 'pump' && toType === 'valve')) && pipeProps.routeStyle === 'Straight') {
                             pipeProps.routeStyle = 'Elbow';
                         }
+                        if (typeof normalizePipeProps === 'function') normalizePipeProps(pipeProps, pipeId);
                         
                         captureState();
                         globalModel[pipeId] = { type: "pipe", name: pipeId, desc: "Pipe Line", props: pipeProps };
@@ -480,7 +2364,8 @@ function makeDraggable(obj) {
                             fromPort: pendingConnectionStart.portSelector,
                             to: nodeId,
                             toPort: portClass,
-                            pipeId: pipeId
+                            pipeId: pipeId,
+                            connectionType: 'hydraulic'
                         };
                         connections.push(
                             typeof orientHydraulicConnection === 'function'
@@ -510,7 +2395,15 @@ function makeDraggable(obj) {
             return;
         }
 
-        if (node && node.type === 'source') {
+        if (pendingConnectionStart && pendingConnectionStart.kind === 'instrument' && pendingConnectionStart.attachMode === 'level') {
+            e.stopPropagation();
+            if (isCanvasInstrumentLevelTarget(nodeId) && typeof attachInstrumentToLevelTarget === 'function') {
+                attachInstrumentToLevelTarget(pendingConnectionStart.id, nodeId);
+            }
+            return;
+        }
+
+        if (node && node.type === 'source' && shouldSourcePortStartSemanticAttachment(node)) {
             e.stopPropagation();
             startSourceAttachment(nodeId, e);
             return;
@@ -538,17 +2431,46 @@ function makeDraggable(obj) {
         const nodeId = obj.dataset.id;
         const node = globalModel[nodeId];
 
+        if (pendingConnectionStart
+            && pendingConnectionStart.kind === 'instrument'
+            && pendingConnectionStart.attachMode === 'level'
+            && isCanvasInstrumentLevelTarget(nodeId)) {
+            showContextMenu(e.clientX, e.clientY, addUserTaskObjectPropertiesMenuItem([
+                {
+                    label: 'Attach LIC level here',
+                    action: () => attachInstrumentToLevelTarget(pendingConnectionStart.id, nodeId)
+                },
+                {
+                    label: 'Delete Object',
+                    danger: true,
+                    action: () => deleteNode(nodeId)
+                }
+            ], nodeId));
+            return;
+        }
+
         if (node && node.type === 'source') {
             const sourceLink = getSourceLink(nodeId);
-            const items = [
-                {
-                    label: 'Attach to equipment',
-                    action: () => {
-                        setAppMode('CONNECT');
-                        startSourceAttachment(nodeId, e);
-                    }
-                }
-            ];
+            const currentSourceType = node.props?.sourceType || (typeof SOURCE_TYPE_OPEN_TANK !== 'undefined' ? SOURCE_TYPE_OPEN_TANK : 'Open Tank / Reservoir');
+            const sourceTypeOptions = typeof SOURCE_TYPE_OPTIONS !== 'undefined'
+                ? SOURCE_TYPE_OPTIONS
+                : [
+                    'Open Tank / Reservoir',
+                    'Pressurized Vessel',
+                    'External Header / Pipe Tie-in',
+                    'Fixed Flow Source',
+                    'Standalone Boundary Source'
+                ];
+
+            const items = sourceTypeOptions.map(sourceType => ({
+                label: sourceType,
+                description: typeof getSourceTypeDescription === 'function'
+                    ? getSourceTypeDescription(sourceType)
+                    : '',
+                active: sourceType === currentSourceType,
+                action: () => startSourceTypeActionFromContextMenu(nodeId, sourceType, e)
+            }));
+            addUserTaskObjectPropertiesMenuItem(items, nodeId);
 
             if (sourceLink) {
                 items.push({
@@ -569,21 +2491,36 @@ function makeDraggable(obj) {
         }
 
         if (node && isInstrumentType(node.type)) {
-            const items = [
-                {
-                    label: 'Connect to pipeline',
-                    action: () => {
-                        setAppMode('CONNECT');
-                        startInstrumentAttachment(nodeId, e);
+            const isLevelController = isCanvasLevelMeasurementInstrument(node);
+            const items = isLevelController
+                ? [
+                    {
+                        label: 'Attach to tank/vessel level',
+                        action: () => {
+                            setAppMode('CONNECT');
+                            startInstrumentAttachment(nodeId, e, { attachMode: 'level' });
+                        }
                     }
-                }
-            ];
+                ]
+                : [
+                    {
+                        label: 'Connect to pipeline',
+                        action: () => {
+                            setAppMode('CONNECT');
+                            startInstrumentAttachment(nodeId, e, { attachMode: 'pipe' });
+                        }
+                    }
+                ];
+            addUserTaskObjectPropertiesMenuItem(items, nodeId);
 
             if (node.props && node.props.attachedTo) {
                 items.push({
-                    label: 'Disconnect from pipeline',
+                    label: isLevelController ? 'Detach from tank/vessel' : 'Disconnect from pipeline',
                     danger: true,
-                    action: () => detachInstrumentFromPipe(nodeId)
+                    action: () => {
+                        if (typeof detachInstrumentFromTarget === 'function') detachInstrumentFromTarget(nodeId);
+                        else detachInstrumentFromPipe(nodeId);
+                    }
                 });
             }
 
@@ -598,7 +2535,7 @@ function makeDraggable(obj) {
         }
 
         if (pendingConnectionStart && pendingConnectionStart.kind === 'source' && isSourceAttachTarget(nodeId)) {
-            showContextMenu(e.clientX, e.clientY, [
+            showContextMenu(e.clientX, e.clientY, addUserTaskObjectPropertiesMenuItem([
                 {
                     label: 'Attach source here',
                     action: () => attachSourceToEquipment(pendingConnectionStart.id, nodeId)
@@ -608,7 +2545,7 @@ function makeDraggable(obj) {
                     danger: true,
                     action: () => deleteNode(nodeId)
                 }
-            ]);
+            ], nodeId));
             return;
         }
 
@@ -628,6 +2565,7 @@ function makeDraggable(obj) {
                 }
             },
         ];
+        addUserTaskObjectPropertiesMenuItem(items, nodeId);
 
         const attachedSource = sourceLinks.find(link => link.targetId === nodeId);
         if (attachedSource) {
@@ -651,11 +2589,13 @@ function makeDraggable(obj) {
 function startSourceAttachment(sourceId, e = null) {
     const source = globalModel[sourceId];
     if (!source || source.type !== 'source') return;
+    if (typeof isSourceTypeSemanticAttachmentCapable === 'function' && !isSourceTypeSemanticAttachmentCapable(source)) return;
 
     const startPoint = getPortPosition(sourceId, '.port.outlet') || getObjectCenterPosition(sourceId);
     if (!startPoint) return;
 
     if (pendingConnectionStart) cancelPendingConnection(false);
+    collapseCanvasWarningPanelForModeling();
 
     const currentPoint = e ? getCanvasPointFromEvent(e) : startPoint;
     pendingConnectionStart = {
@@ -676,7 +2616,7 @@ function startSourceAttachment(sourceId, e = null) {
     drawConnections();
 }
 
-function startInstrumentAttachment(instrumentId, e = null) {
+function startInstrumentAttachment(instrumentId, e = null, options = {}) {
     const instrument = globalModel[instrumentId];
     if (!instrument || !isInstrumentType(instrument.type)) return;
 
@@ -684,11 +2624,14 @@ function startInstrumentAttachment(instrumentId, e = null) {
     if (!startPoint) return;
 
     if (pendingConnectionStart) cancelPendingConnection(false);
+    collapseCanvasWarningPanelForModeling();
 
     const currentPoint = e ? getCanvasPointFromEvent(e) : startPoint;
+    const attachMode = options.attachMode || (isCanvasLevelMeasurementInstrument(instrument) ? 'level' : 'pipe');
     pendingConnectionStart = {
         kind: 'instrument',
         id: instrumentId,
+        attachMode,
         currentX: currentPoint.x,
         currentY: currentPoint.y
     };
@@ -704,7 +2647,11 @@ function startInstrumentAttachment(instrumentId, e = null) {
     drawConnections();
 }
 
-function addEquipment(type) {
+function addEquipment(type, placement = null, options = {}) {
+    if (typeof ensureBasisConfirmedBeforeModeling === 'function' && !ensureBasisConfirmedBeforeModeling()) {
+        return null;
+    }
+    collapseCanvasWarningPanelForModeling();
     captureState();
 
     const prefix = getObjectPrefix(type);
@@ -723,14 +2670,16 @@ function addEquipment(type) {
     objDiv.dataset.id = newId;
     objDiv.dataset.type = type;
 
-    // Drop it near the center of the canvas
     const canvas = document.getElementById('canvas');
-    const scrollLeft = canvas.scrollLeft;
-    const scrollTop = canvas.scrollTop;
-    const rect = canvas.getBoundingClientRect();
-    
-    objDiv.style.left = (scrollLeft + rect.width / 2 - 40) + 'px';
-    objDiv.style.top = (scrollTop + rect.height / 2 - 40) + 'px';
+    const objectPlacement = normalizeCanvasPlacement(
+        placement
+        || (options.placementMode === 'ribbon-click'
+            ? getRibbonClickCanvasPlacement(type)
+            : getDefaultCanvasPlacement(type))
+    );
+
+    objDiv.style.left = `${objectPlacement.left}px`;
+    objDiv.style.top = `${objectPlacement.top}px`;
 
     canvas.appendChild(objDiv);
     
@@ -761,7 +2710,15 @@ function addEquipment(type) {
     applyObjectVisuals(newId);
     makeDraggable(objDiv);
     selectNode(newId, objDiv);
+    minimizeObjectTaskWindowAfterEquipmentAdd(newId);
     setAppMode('SELECT');
+    if (typeof updateSimulation === 'function') {
+        updateSimulation({ renderSidebarAfter: false });
+    } else if (typeof updateAllObjectOperatingStatusVisuals === 'function') {
+        updateAllObjectOperatingStatusVisuals();
+    }
+
+    return newId;
 }
 
 function initDraggableObjects() {
