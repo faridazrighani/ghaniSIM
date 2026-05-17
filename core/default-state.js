@@ -1,1 +1,41 @@
-window.DEFAULT_SIMULATION_STATE = {"model":{"FLUID":{"type":"fluid","name":"Fluid Basis","props":{"inputMode":"Basic","fluidName":"Water","temp":25,"density":996.7294738665296,"sg":0.9967573830732557,"viscosity":0.8933607412655798,"dynViscosity":0.8904389816146543,"vaporPressure":0.03168531412275435,"specificHeat":4.18,"bulkModulus":2.2,"specVolume":0.0010032812575721107,"specWeight":9777.916138630655,"speedOfSound":1485.6711502410765}},"TK-100":{"type":"tank","name":"TK-100","desc":"Storage Tank","props":{"visualScale":100,"elevation":5,"diameter":5,"volume":39.27,"liquidLevel":2,"hll":4.5,"nll":2.5,"lll":0.5,"tLevelElev":0.2,"pressure":0,"designPressure":0,"psvMode":"Manual","psvSet":0,"vaporPressure":0.03168531412275435}},"P-100":{"type":"pump","name":"P-100","desc":"Transfer Pump","props":{"inputMode":"Basic","elevation":0,"designFlow":100,"designHead":44,"designEfficiency":80,"curveData":[{"flow":0,"head":55,"eff":0,"npshr":1},{"flow":50,"head":50,"eff":60,"npshr":1.5},{"flow":100,"head":40,"eff":75,"npshr":2},{"flow":150,"head":20,"eff":50,"npshr":4}]}},"PIPE-2":{"type":"pipe","name":"PIPE-2","desc":"Discharge Line","props":{"minorLoss":0,"segments":[{"name":"Discharge 4 in","pipeSize":"NPS 4 - Sch 40","diameter":0.10226,"length":50,"roughness":0.000045,"material":"Commercial steel","minorLoss":5}],"routeStyle":"Elbow"}},"TK-101":{"type":"tank","name":"TK-101","desc":"Processing Tank","props":{"visualScale":100,"elevation":25,"diameter":5,"volume":39.27,"liquidLevel":2,"hll":4.5,"nll":2.5,"lll":0.5,"tLevelElev":0.2,"pressure":0,"designPressure":0,"psvMode":"Manual","psvSet":0,"vaporPressure":0.03168531412275435}},"V-100":{"type":"valve","name":"V-100","desc":"Valve","props":{"valveType":"Globe Valve","position":"Suction","cv":100,"opening":100}},"PIPE-1":{"type":"pipe","name":"PIPE-1","desc":"Pipe Line","props":{"routeStyle":"Elbow","minorLoss":0,"segments":[{"name":"Segment 1","pipeSize":"NPS 8 - Sch 40","diameter":0.20272,"length":3,"roughness":0.00026,"material":"Cast iron","minorLoss":0}]}},"I-100":{"type":"lineMonitor","name":"I-100","desc":"PTF","props":{"pressureRangeMin":0,"pressureRangeMax":10,"tempRangeMin":0,"tempRangeMax":150,"flowRangeMin":0,"flowRangeMax":200,"attachedTo":"PIPE-2"}},"PIPE-3":{"type":"pipe","name":"PIPE-3","desc":"Pipe Line","props":{"routeStyle":"Elbow","minorLoss":0,"segments":[{"name":"Segment 2","pipeSize":"NPS 8 - Sch 40","material":"Commercial steel","diameter":0.20272,"length":10,"roughness":0.000045,"minorLoss":0}]}},"I-101":{"type":"lineMonitor","name":"I-101","desc":"PTF","props":{"pressureRangeMin":0,"pressureRangeMax":10,"tempRangeMin":0,"tempRangeMax":150,"flowRangeMin":0,"flowRangeMax":200,"attachedTo":"PIPE-3"}},"I-102":{"type":"lineMonitor","name":"I-102","desc":"PTF","props":{"pressureRangeMin":0,"pressureRangeMax":10,"tempRangeMin":0,"tempRangeMax":150,"flowRangeMin":0,"flowRangeMax":200,"attachedTo":"PIPE-1"}}},"connections":[{"from":"P-100","fromPort":".port.outlet","to":"TK-101","toPort":".port.inlet","pipeId":"PIPE-2"},{"from":"TK-100","fromPort":".port.outlet","to":"V-100","toPort":".port.inlet","pipeId":"PIPE-1"},{"from":"V-100","fromPort":".port.outlet","to":"P-100","toPort":".port.inlet","pipeId":"PIPE-3"}],"instrumentLinks":[{"instrumentId":"I-100","pipeId":"PIPE-2","location":0.5358273239231448},{"instrumentId":"I-101","pipeId":"PIPE-3","location":0.4949165077255785},{"instrumentId":"I-102","pipeId":"PIPE-1","location":0.5316426558244595}],"visuals":{"TK-100":{"left":"27.2px","top":"92.8px"},"P-100":{"left":"251.4px","top":"295px"},"TK-101":{"left":"349.2px","top":"65.2px"},"V-100":{"left":"153.9px","top":"210.4px"},"I-100":{"left":"352px","top":"180.9px"},"I-101":{"left":"36px","top":"298.5px"},"I-102":{"left":"146.4px","top":"102.5px"}}};
+window.DEFAULT_SIMULATION_STATE = {
+    model: {
+        SETTINGS: {
+            type: 'settings',
+            name: 'Simulation Settings',
+            props: {
+                unitStandard: 'Metric / European Engineering',
+                basisConfirmed: false,
+                basisDirty: false,
+                lastConfirmedFluid: '',
+                lastConfirmedTemperature: null,
+                lastConfirmedUnitStandard: 'Metric / European Engineering',
+                migratedFromLegacy: false
+            }
+        },
+        FLUID: {
+            type: 'fluid',
+            name: 'Fluid Basis',
+            props: {
+                inputMode: 'Basic',
+                fluidName: 'Water',
+                temp: 25,
+                density: 997.0470133997646,
+                sg: 0.9970749314978467,
+                viscosity: 0.8926327060988247,
+                dynViscosity: 0.889996773678783,
+                vaporPressure: 0.03169824486313973,
+                specificHeat: 4.181446178557689,
+                bulkModulus: 2.233493550571319,
+                specVolume: 0.001002961732556789,
+                specWeight: 9781.031201451691,
+                vaporPressureHead: 0.32407876235416877,
+                speedOfSound: 1496.6992220000063
+            }
+        }
+    },
+    connections: [],
+    instrumentLinks: [],
+    sourceLinks: [],
+    visuals: {}
+};
