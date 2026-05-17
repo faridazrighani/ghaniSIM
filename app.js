@@ -2,10 +2,30 @@
  * Modern Process Simulator - Main Entry Point (Bootstrap)
  */
 
+function runUserRequestedSolve() {
+    if (typeof updateSimulation === 'function') updateSimulation();
+    if (typeof drawConnections === 'function') drawConnections();
+    if (typeof updateAllObjectOperatingStatusVisuals === 'function') {
+        updateAllObjectOperatingStatusVisuals();
+    }
+    if (typeof activeChartPumpId !== 'undefined' && activeChartPumpId && typeof updatePumpChart === 'function') {
+        updatePumpChart(activeChartPumpId);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     // 1. Initialize core components
     initMenuBar();
-    initializeChart(); // Pump performance chart modal
+    if (typeof initTaskWindow === 'function') initTaskWindow();
+    if (typeof initCanvasWarningPanelWindow === 'function') initCanvasWarningPanelWindow();
+    if (typeof initCanvasSelectionActions === 'function') initCanvasSelectionActions();
+
+    const canvas = document.getElementById('canvas');
+    if (canvas) {
+        canvas.querySelectorAll('.pfd-object').forEach(el => el.remove());
+        const svgLines = document.getElementById('svg-lines');
+        if (svgLines) svgLines.innerHTML = '';
+    }
     
     // 2. Setup Palette UI
     renderToolbarPalette();
@@ -15,11 +35,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (window.DEFAULT_SIMULATION_STATE) {
         applySimulationState(JSON.stringify(window.DEFAULT_SIMULATION_STATE));
     }
+    if (typeof ensureSimulationSettings === 'function') ensureSimulationSettings();
+    if (typeof updateBasisStatusPill === 'function') updateBasisStatusPill();
 
     // 4. Setup Global Mode Button Listeners
     const btnSelect = document.getElementById('btn-mode-select');
     const btnConnect = document.getElementById('btn-mode-connect');
     const btnFluidBasis = document.getElementById('btn-fluid-basis');
+    const btnSolve = document.getElementById('btn-solve');
     
     if (btnSelect) {
         btnSelect.addEventListener('click', () => setAppMode('SELECT'));
@@ -32,9 +55,16 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnFluidBasis) {
         btnFluidBasis.addEventListener('click', () => openFluidBasis());
     }
+    const basisStatusPill = document.getElementById('basisStatusPill');
+    if (basisStatusPill) {
+        basisStatusPill.addEventListener('click', () => openFluidBasis());
+    }
+
+    if (btnSolve) {
+        btnSolve.addEventListener('click', runUserRequestedSolve);
+    }
 
     // 5. Canvas Event Listeners
-    const canvas = document.getElementById('canvas');
     if (canvas) {
         canvas.addEventListener('click', (e) => {
             hideContextMenu();
@@ -74,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
         window.clearTimeout(resizeTimer);
         resizeTimer = window.setTimeout(() => {
             drawConnections();
+            if (typeof positionCanvasWarningPanelDefault === 'function') positionCanvasWarningPanelDefault();
             if (activeChartPumpId) updatePumpChart(activeChartPumpId);
             if (pumpChartInstance) pumpChartInstance.resize();
         }, 80);
@@ -116,15 +147,26 @@ document.addEventListener('DOMContentLoaded', () => {
     if (globalModel["FLUID"] && globalModel["FLUID"].props.fluidName === 'Water') {
         updateWaterProperties();
     }
-    
-    // Give DOM time to render before drawing initial lines
-    setTimeout(() => {
+
+    const basisConfirmedAtStartup = typeof isBasisConfirmed === 'function' && isBasisConfirmed();
+    if (!basisConfirmedAtStartup) {
+        const reason = 'Set Fluid Basis and Unit Standard before adding equipment.';
+        if (typeof activateInitialFluidBasisPrompt === 'function') {
+            activateInitialFluidBasisPrompt({ setupRequired: true, reason });
+        } else if (typeof openFluidBasisTaskWindow === 'function') {
+            openFluidBasisTaskWindow({ setupRequired: true, reason });
+        }
+    } else if (typeof closeFluidBasisTaskWindow === 'function') {
+        closeFluidBasisTaskWindow();
+    }
+
+    // Defer non-critical startup work so the initial Fluid Basis notice can paint first.
+    requestAnimationFrame(() => window.setTimeout(() => {
         updateSimulation();
         drawConnections();
-        // Auto select Fluid Basis at start to show case-basis properties
-        if (globalModel['FLUID']) {
-            globalModel.FLUID.name = 'Fluid Basis';
-            openFluidBasis();
+        // Thesis application: always present Help > About on browser open before modeling continues.
+        if (typeof openAboutDialog === 'function') {
+            openAboutDialog();
         }
-    }, 100);
+    }, 0));
 });
