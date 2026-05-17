@@ -15,9 +15,13 @@ assert(canvasManager.includes('function updateSourceLiveParameterPanel(el, nodeI
 assert(canvasManager.includes('function getSourceLivePumpImpact(sourceId)'), 'SRC live panel should detect the related pump suction path');
 assert(canvasManager.includes('resolveSourceBoundaryData(sourceId, globalModel)'), 'SRC live panel should use resolved source boundary data');
 
-['Mode', 'Outlet Flow', 'Source Press.', 'Source Elev.', 'Source Head', 'Suction Loss', 'NPSH at Pump'].forEach(label => {
+['Mode', 'Dyn Mode', 'Outlet Flow', 'Target', 'Contribution', 'Dyn Feed', 'Target Net', 'Dyn Net', 'Target Trend', 'Dyn Trend', 'Source Press.', 'Source Elev.', 'Source Head', 'Suction Loss', 'NPSH at Pump'].forEach(label => {
     assert(canvasManager.includes(`label: '${label}'`), `SRC live panel should display ${label}`);
 });
+
+assert(canvasManager.includes('Attached target inventory balance after all pipe and SRC flows'), 'SRC live panel should explain target net-flow contribution');
+assert(canvasManager.includes('How this SRC contributes to tank dynamic inventory'), 'SRC live panel should explain dynamic contribution mode');
+assert(canvasManager.includes('SRC contribution included in dynamic tank inventory'), 'SRC live panel should show dynamic SRC contribution');
 
 assert(!canvasManager.includes("label: 'NPSHr'") || canvasManager.indexOf("label: 'NPSHr'") < canvasManager.indexOf('function getSourceBoundaryShortMode'), 'SRC live panel should keep NPSHr on pump panel only');
 

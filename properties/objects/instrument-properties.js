@@ -24,5 +24,5 @@ const LINE_MONITOR_SCHEMA = {
 
 const LEVEL_CONTROLLER_SCHEMA = {
     setPoint: { label: 'Set Point', unit: '%', type: 'number', default: 50 },
-    outputMode: { label: 'Output Mode', type: 'select', options: ['Manual', 'Auto'], default: 'Auto' }
+    outputMode: { label: 'Output Mode', type: 'select', options: ['Manual', 'Auto', 'Set Level Assist', 'Auto Balance Readout'], default: 'Auto' }
 };

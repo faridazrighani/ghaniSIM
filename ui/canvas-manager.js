@@ -82,6 +82,9 @@ const CANVAS_WARNING_PANEL_MARGIN = 12;
 const WARNING_PANEL_DETAIL_MAX_CHARS = 92;
 let canvasWarningPanelDragState = null;
 let canvasWarningPanelViewportFrame = null;
+const licLevelAlarmActiveIds = new Set();
+let licLevelAlarmTimer = null;
+let licLevelAlarmAudioContext = null;
 
 function getPumpOperatingWarnings(node) {
     return Array.isArray(node?.results?.warnings)
@@ -308,6 +311,7 @@ function getTankOperatingStatusTooltip(nodeId, node, visualStatus) {
     const results = node?.results || {};
     const props = node?.props || {};
     const warnings = getGenericNodeWarnings(node);
+    const advisories = Array.isArray(results.advisories) ? results.advisories.filter(Boolean) : [];
     const lines = [
         `Tank status: ${results.status || visualStatus || 'Review tank boundary'}`
     ];
@@ -317,12 +321,21 @@ function getTankOperatingStatusTooltip(nodeId, node, visualStatus) {
     addPumpStatusMetric(lines, 'Outlet nozzle elevation', props.outletNozzleElevation, 'm');
     addPumpStatusMetric(lines, 'Current level', props.liquidLevel, 'm');
     addPumpStatusMetric(lines, 'Liquid volume', results.liquidVolume ?? props.liquidVolume, 'm3');
+    addPumpStatusMetric(lines, 'Pipe inlet flow', results.pipeInletFlow, 'm3/h');
+    addPumpStatusMetric(lines, 'Source feed', results.sourceFeedFlow, 'm3/h');
+    addPumpStatusMetric(lines, 'Dynamic source feed', results.dynamicSourceFeedFlow, 'm3/h');
     addPumpStatusMetric(lines, 'Outlet flow', results.outletFlow, 'm3/h');
     addPumpStatusMetric(lines, 'Net flow', results.netFlow, 'm3/h');
+    addPumpStatusMetric(lines, 'Dynamic net flow', results.dynamicNetFlow, 'm3/h');
     addPumpStatusMetric(lines, 'Level trend', results.levelTrend);
+    addPumpStatusMetric(lines, 'Dynamic trend', results.dynamicLevelTrend);
+    addPumpStatusMetric(lines, 'Level rate', results.levelRate, 'm/h');
 
     if (warnings.length > 0) {
         lines.push(`Warnings: ${warnings.join(' | ')}`);
+    }
+    if (advisories.length > 0) {
+        lines.push(`Advisories: ${advisories.join(' | ')}`);
     }
 
     return lines.join('\n');
@@ -335,7 +348,18 @@ function buildTankLiveParameterRows(nodeId, node) {
     const pressureAbsUnit = getTankLiveDisplayUnit('pressureAbs');
     const volumeUnit = getTankLiveDisplayUnit('volume');
     const flowUnit = getTankLiveDisplayUnit('flow');
+    const levelRateUnit = getTankLiveDisplayUnit('levelRate', { unit: 'm/h' });
     const percentUnit = getTankLiveDisplayUnit('percent');
+    const dynamicInventory = results.dynamicInventory || {};
+    const dynamicSettings = typeof getDynamicInventorySettings === 'function'
+        ? getDynamicInventorySettings()
+        : {};
+    const dynamicTimeText = typeof formatDynamicInventoryClock === 'function'
+        ? formatDynamicInventoryClock(dynamicSettings.dynamicSimulationTimeSeconds || 0)
+        : '-';
+    const dynamicStepText = dynamicInventory?.stepSeconds && typeof formatDynamicInventoryDuration === 'function'
+        ? formatDynamicInventoryDuration(dynamicInventory.stepSeconds)
+        : '-';
 
     const pressureValue = value => (
         Number.isFinite(parseFloat(value)) ? getTankLiveDisplayValue(value, 'pressureAbs', 3) : '-'
@@ -348,6 +372,9 @@ function buildTankLiveParameterRows(nodeId, node) {
     );
     const flowValue = (value, options = {}) => (
         Number.isFinite(parseFloat(value)) ? getTankLiveDisplayValue(value, 'flow', 1, options) : '-'
+    );
+    const levelRateValue = (value) => (
+        Number.isFinite(parseFloat(value)) ? getTankLiveDisplayValue(value, 'levelRate', 2, { showSign: true }) : '-'
     );
     const percentValue = value => (
         Number.isFinite(parseFloat(value)) ? formatPumpLiveNumber(value, 1) : '-'
@@ -362,11 +389,31 @@ function buildTankLiveParameterRows(nodeId, node) {
         { label: 'Level', title: 'Current liquid level above tank base', value: headValue(props.liquidLevel), unit: headUnit },
         { label: 'Level %', title: 'Current liquid level as percent of tank height', value: percentValue(results.fillPercent ?? props.fillPercent), unit: percentUnit },
         { label: 'Volume', title: 'Current liquid inventory volume', value: volumeValue(results.liquidVolume ?? props.liquidVolume), unit: volumeUnit },
+        { type: 'section', label: 'Dynamic' },
+        { label: 'Sim Time', title: 'Accumulated dynamic inventory time from Simulate > Step Dynamic Inventory', value: dynamicTimeText, unit: '' },
+        { label: 'Last Step', title: 'Last dynamic inventory timestep applied to this tank', value: dynamicStepText, unit: '' },
         { type: 'section', label: 'Flow' },
+        { label: 'Pipe Inlet', title: 'Solved hydraulic pipe flow entering tank, excluding dashed SRC feed attachments', value: flowValue(results.pipeInletFlow), unit: flowUnit },
+        { label: 'SRC Feed', title: 'Total dashed SRC feed attached to this tank', value: flowValue(results.sourceFeedFlow), unit: flowUnit },
+        { label: 'Dyn SRC', title: 'Dashed SRC feed included in dynamic inventory; excludes SRC modes set to Initial Inventory Only or Inactive', value: flowValue(results.dynamicSourceFeedFlow), unit: flowUnit },
         { label: 'Outlet Flow', title: 'Solved flow leaving tank through solid hydraulic outlet path', value: flowValue(results.outletFlow), unit: flowUnit },
         { label: 'Net Flow', title: 'Tank inventory balance = inlet flow - outlet flow', value: flowValue(results.netFlow, { showSign: true }), unit: flowUnit },
-        { label: 'Trend', title: 'Level trend from steady net-flow balance; level is not dynamically integrated over time', value: results.levelTrend || '-', unit: '' }
+        { label: 'Dyn Net', title: 'Dynamic inventory balance used by realtime/step simulation = pipe inlet + dynamic SRC feed - outlet flow', value: flowValue(results.dynamicNetFlow, { showSign: true }), unit: flowUnit },
+        { label: 'Level Rate', title: 'Projected level rate = net flow divided by tank cross-sectional area', value: levelRateValue(results.levelRate), unit: levelRateUnit },
+        { label: 'Dyn Rate', title: 'Dynamic level rate used by Step Dynamic Inventory', value: levelRateValue(results.dynamicLevelRate), unit: levelRateUnit },
+        { label: 'Trend', title: 'Level trend from steady net-flow balance', value: results.levelTrend || '-', unit: '' },
+        { label: 'Dyn Trend', title: 'Level trend used by realtime/step dynamic inventory', value: results.dynamicLevelTrend || '-', unit: '' }
     ];
+}
+
+function getSourceDynamicContributionShortMode(node) {
+    const mode = typeof getSourceDynamicContributionMode === 'function'
+        ? getSourceDynamicContributionMode(node)
+        : (node?.props?.dynamicContributionMode || 'Continuous Feed to Tank');
+    if (mode === 'Continuous Feed to Tank') return 'Feed';
+    if (mode === 'Initial Inventory Only') return 'Initial';
+    if (mode === 'Inactive') return 'Inactive';
+    return mode || '-';
 }
 
 function getSourceBoundaryShortMode(node) {
@@ -433,6 +480,10 @@ function getSourceLiveEffectiveFluid(source) {
 }
 
 function getSourceLiveBoundarySnapshot(sourceId, node) {
+    const link = getSourceLiveLink(sourceId);
+    const targetId = link?.targetId || '';
+    const target = targetId ? globalModel?.[targetId] : null;
+    const targetIsStorage = !!(target && ['tank', 'separator', 'verticalVessel'].includes(target.type));
     const impact = getSourceLivePumpImpact(sourceId);
     const boundary = typeof resolveSourceBoundaryData === 'function'
         ? resolveSourceBoundaryData(sourceId, globalModel)
@@ -443,7 +494,16 @@ function getSourceLiveBoundarySnapshot(sourceId, node) {
     const density = Number.isFinite(densityRaw) ? Math.max(densityRaw, 1) : 1000;
     const pumpFlow = parseFloat(impact?.pump?.results?.flow);
     const sourceFlow = parseFloat(node?.props?.flow);
-    const flow = Number.isFinite(pumpFlow) ? pumpFlow : (Number.isFinite(sourceFlow) ? sourceFlow : null);
+    const sourceContribution = Number.isFinite(sourceFlow) ? sourceFlow : null;
+    const dynamicContributionMode = typeof getSourceDynamicContributionMode === 'function'
+        ? getSourceDynamicContributionMode(node)
+        : (node?.props?.dynamicContributionMode || 'Continuous Feed to Tank');
+    const dynamicContribution = dynamicContributionMode === 'Continuous Feed to Tank' && sourceContribution !== null
+        ? sourceContribution
+        : (sourceContribution !== null ? 0 : null);
+    const flow = targetIsStorage && sourceContribution !== null
+        ? sourceContribution
+        : (Number.isFinite(pumpFlow) ? pumpFlow : sourceContribution);
     const path = impact?.state?.suctionPath || null;
     const velocityHead = typeof getSourceVelocityHeadForBoundary === 'function'
         ? getSourceVelocityHeadForBoundary(node, flow || 0, path, globalModel)
@@ -462,6 +522,17 @@ function getSourceLiveBoundarySnapshot(sourceId, node) {
         boundary,
         density,
         flow,
+        sourceContribution,
+        dynamicContributionMode,
+        dynamicContribution,
+        targetId,
+        targetName: target?.name || targetId || '',
+        targetType: target?.type || '',
+        targetNetFlow: Number.isFinite(parseFloat(target?.results?.netFlow)) ? parseFloat(target.results.netFlow) : null,
+        targetDynamicNetFlow: Number.isFinite(parseFloat(target?.results?.dynamicNetFlow)) ? parseFloat(target.results.dynamicNetFlow) : null,
+        targetLevelTrend: target?.results?.levelTrend || '',
+        targetDynamicLevelTrend: target?.results?.dynamicLevelTrend || '',
+        targetLevelRate: Number.isFinite(parseFloat(target?.results?.levelRate)) ? parseFloat(target.results.levelRate) : null,
         sourceHead,
         suctionLoss: Number.isFinite(suctionLoss) ? suctionLoss : null,
         npshaAtPump: Number.isFinite(npsha) ? npsha : null,
@@ -481,11 +552,18 @@ function getSourceOperatingStatusTooltip(sourceId, node, visualStatus) {
     const snapshot = getSourceLiveBoundarySnapshot(sourceId, node);
     const boundary = snapshot.boundary || {};
     const lines = [
-        `SRC status: ${snapshot.impact?.pumpId ? `Contributing to ${snapshot.impact.pumpId}` : 'No solved pump suction path'}`,
+        `SRC status: ${snapshot.targetId ? `Feeding ${snapshot.targetId}` : (snapshot.impact?.pumpId ? `Contributing to ${snapshot.impact.pumpId}` : 'No solved pump suction path')}`,
         `Mode: ${getSourceBoundaryShortMode(node)}`
     ];
 
     addPumpStatusMetric(lines, 'Flow to suction network', snapshot.flow, 'm3/h');
+    addPumpStatusMetric(lines, 'Target equipment', snapshot.targetId);
+    addPumpStatusMetric(lines, 'Contribution to tank', snapshot.sourceContribution, 'm3/h');
+    addPumpStatusMetric(lines, 'Dynamic contribution', snapshot.dynamicContribution, 'm3/h');
+    addPumpStatusMetric(lines, 'Target net flow', snapshot.targetNetFlow, 'm3/h');
+    addPumpStatusMetric(lines, 'Target dynamic net flow', snapshot.targetDynamicNetFlow, 'm3/h');
+    addPumpStatusMetric(lines, 'Target trend', snapshot.targetLevelTrend);
+    addPumpStatusMetric(lines, 'Target dynamic trend', snapshot.targetDynamicLevelTrend);
     addPumpStatusMetric(lines, 'Source pressure', boundary.pressureAbsBar, 'bar a');
     addPumpStatusMetric(lines, 'Source elevation', boundary.elevation, 'm');
     addPumpStatusMetric(lines, 'Source head', snapshot.sourceHead, 'm');
@@ -507,8 +585,8 @@ function buildSourceLiveParameterRows(sourceId, node) {
     const flowUnit = getPumpLiveDisplayUnit('flow');
     const headUnit = getPumpLiveDisplayUnit('head');
     const pressureAbsUnit = getPumpLiveDisplayUnit('pressureAbs');
-    const flowValue = (value) => (
-        Number.isFinite(parseFloat(value)) ? getPumpLiveDisplayValue(value, 'flow', 1) : '-'
+    const flowValue = (value, options = {}) => (
+        Number.isFinite(parseFloat(value)) ? getPumpLiveDisplayValue(value, 'flow', 1, options) : '-'
     );
     const pressureValue = (value) => (
         Number.isFinite(parseFloat(value)) ? getPumpLiveDisplayValue(value, 'pressureAbs', 3) : '-'
@@ -519,7 +597,15 @@ function buildSourceLiveParameterRows(sourceId, node) {
 
     return [
         { label: 'Mode', title: 'SRC boundary mode', value: getSourceBoundaryShortMode(node), unit: '' },
+        { label: 'Dyn Mode', title: 'How this SRC contributes to tank dynamic inventory', value: getSourceDynamicContributionShortMode(node), unit: '' },
         { label: 'Outlet Flow', title: 'Flow leaving the SRC boundary or attached source boundary toward pump suction', value: flowValue(snapshot.flow), unit: flowUnit },
+        { label: 'Target', title: 'Attached tank/vessel receiving this SRC contribution', value: snapshot.targetId || '-', unit: '' },
+        { label: 'Contribution', title: 'This SRC volumetric contribution into the attached storage target', value: flowValue(snapshot.sourceContribution), unit: flowUnit },
+        { label: 'Dyn Feed', title: 'SRC contribution included in dynamic tank inventory', value: flowValue(snapshot.dynamicContribution), unit: flowUnit },
+        { label: 'Target Net', title: 'Attached target inventory balance after all pipe and SRC flows', value: flowValue(snapshot.targetNetFlow, { showSign: true }), unit: flowUnit },
+        { label: 'Dyn Net', title: 'Attached target dynamic inventory balance used by realtime/step simulation', value: flowValue(snapshot.targetDynamicNetFlow, { showSign: true }), unit: flowUnit },
+        { label: 'Target Trend', title: 'Attached target level trend from net-flow balance', value: snapshot.targetLevelTrend || '-', unit: '' },
+        { label: 'Dyn Trend', title: 'Attached target level trend used by dynamic inventory', value: snapshot.targetDynamicLevelTrend || '-', unit: '' },
         { label: 'Source Press.', title: 'Absolute source boundary pressure used for suction-head calculation', value: pressureValue(boundary.pressureAbsBar), unit: pressureAbsUnit },
         { label: 'Source Elev.', title: 'Effective source elevation or inherited liquid surface elevation', value: headValue(boundary.elevation), unit: headUnit },
         { label: 'Source Head', title: 'Total source hydraulic head before suction losses', value: headValue(snapshot.sourceHead), unit: headUnit },
@@ -760,6 +846,221 @@ function updateTankLiveParameterPanel(el, nodeId, node, visualStatus) {
         item.append(label, value, unit);
         panel.appendChild(item);
     });
+}
+
+function getLicCanvasTrendHistory(instrument) {
+    const history = Array.isArray(instrument?.results?.levelTrendHistory)
+        ? instrument.results.levelTrendHistory
+        : [];
+    return (typeof sanitizeLevelControllerTrendHistory === 'function'
+        ? sanitizeLevelControllerTrendHistory(history)
+        : history
+    ).filter(sample => Number.isFinite(parseFloat(sample?.level))).slice(-28);
+}
+
+function getLicCanvasTargetSnapshot(instrumentId, instrument) {
+    const link = typeof getInstrumentLink === 'function' ? getInstrumentLink(instrumentId) : null;
+    const targetId = link?.targetId || instrument?.props?.attachedTo || '';
+    const target = targetId ? globalModel[targetId] : null;
+    if (!target || target.type !== 'tank') return null;
+
+    const props = target.props || {};
+    const results = target.results || {};
+    const level = parseFloat(props.liquidLevel);
+    const tankHeight = parseFloat(props.tankHeight);
+    const fillPercent = Number.isFinite(parseFloat(results.fillPercent))
+        ? parseFloat(results.fillPercent)
+        : parseFloat(props.fillPercent);
+    const volume = Number.isFinite(parseFloat(results.liquidVolume))
+        ? parseFloat(results.liquidVolume)
+        : parseFloat(props.liquidVolume);
+    const dynamicDeltaVolume = parseFloat(results.dynamicInventory?.actualDeltaVolume);
+    const diameter = parseFloat(props.diameter);
+    const tankArea = Number.isFinite(diameter) && diameter > 0
+        ? (Math.PI / 4) * Math.pow(diameter, 2)
+        : null;
+    const history = getLicCanvasTrendHistory(instrument);
+    const previousSample = history.length > 1 ? history[history.length - 2] : null;
+    const previousLevel = parseFloat(previousSample?.level);
+    const historyDeltaVolume = Number.isFinite(previousLevel) && Number.isFinite(level) && Number.isFinite(tankArea)
+        ? (level - previousLevel) * tankArea
+        : null;
+
+    return {
+        targetId,
+        target,
+        level,
+        hll: parseFloat(props.hll),
+        nll: parseFloat(props.nll),
+        lll: parseFloat(props.lll),
+        tankHeight,
+        fillPercent,
+        volume,
+        incrementVolume: Number.isFinite(dynamicDeltaVolume) ? dynamicDeltaVolume : historyDeltaVolume,
+        history
+    };
+}
+
+function getLicCanvasLevelAlarm(snapshot) {
+    if (!snapshot || !Number.isFinite(snapshot.level)) return null;
+    if (Number.isFinite(snapshot.hll) && snapshot.level >= snapshot.hll) return 'HLL';
+    if (Number.isFinite(snapshot.lll) && snapshot.level <= snapshot.lll) return 'LLL';
+    return null;
+}
+
+function getLicCanvasChartData(snapshot) {
+    const history = snapshot?.history || [];
+    const levels = history.map(sample => parseFloat(sample.level)).filter(Number.isFinite);
+    if (!levels.length && Number.isFinite(snapshot?.level)) levels.push(snapshot.level);
+    [snapshot?.hll, snapshot?.nll, snapshot?.lll].forEach(value => {
+        if (Number.isFinite(value)) levels.push(value);
+    });
+    const minRaw = levels.length ? Math.min(...levels) : 0;
+    const maxRaw = levels.length ? Math.max(...levels) : 1;
+    const span = Math.max(maxRaw - minRaw, 0.5);
+    const min = Math.max(0, minRaw - span * 0.12);
+    const maxLimit = Number.isFinite(snapshot?.tankHeight) && snapshot.tankHeight > 0 ? snapshot.tankHeight : maxRaw + span * 0.12;
+    const max = Math.max(min + 0.5, Math.min(maxRaw + span * 0.12, Math.max(maxLimit, maxRaw)));
+    const width = 222;
+    const height = 76;
+    const x0 = 10;
+    const x1 = width - 10;
+    const y0 = 8;
+    const y1 = height - 16;
+    const yFor = value => y1 - ((value - min) / (max - min)) * (y1 - y0);
+    const xFor = index => {
+        const count = Math.max(history.length, 2);
+        return x0 + (index / (count - 1)) * (x1 - x0);
+    };
+    const points = history.length
+        ? history.map((sample, index) => {
+            const level = parseFloat(sample.level);
+            return Number.isFinite(level) ? `${xFor(index).toFixed(1)},${yFor(level).toFixed(1)}` : null;
+        }).filter(Boolean).join(' ')
+        : '';
+    return { width, height, x0, x1, yFor, points };
+}
+
+function renderLicCanvasLimitLine(label, value, data, className) {
+    if (!Number.isFinite(value)) return '';
+    const y = data.yFor(value).toFixed(1);
+    return `
+        <line class="${className}" x1="${data.x0}" y1="${y}" x2="${data.x1}" y2="${y}"></line>
+        <text class="lic-canvas-trend-limit-text" x="${data.x1 - 24}" y="${Math.max(9, parseFloat(y) - 2).toFixed(1)}">${label}</text>
+    `;
+}
+
+function renderLicCanvasTrendSvg(snapshot) {
+    const data = getLicCanvasChartData(snapshot);
+    const history = snapshot?.history || [];
+    const latest = history[history.length - 1] || null;
+    const latestLevel = parseFloat(latest?.level);
+    const latestIndex = history.length - 1;
+    const latestPoint = Number.isFinite(latestLevel) && latestIndex >= 0
+        ? `<circle class="lic-canvas-trend-point" cx="${(data.x0 + (latestIndex / Math.max(history.length - 1, 1)) * (data.x1 - data.x0)).toFixed(1)}" cy="${data.yFor(latestLevel).toFixed(1)}" r="2.8"></circle>`
+        : '';
+    return `
+        <svg class="lic-canvas-trend-svg" viewBox="0 0 ${data.width} ${data.height}" aria-hidden="true">
+            <rect class="lic-canvas-trend-plot" x="0.5" y="0.5" width="${data.width - 1}" height="${data.height - 1}" rx="7"></rect>
+            ${renderLicCanvasLimitLine('HLL', snapshot?.hll, data, 'lic-canvas-trend-limit lic-canvas-trend-limit-high')}
+            ${renderLicCanvasLimitLine('LLL', snapshot?.lll, data, 'lic-canvas-trend-limit lic-canvas-trend-limit-low')}
+            ${data.points ? `<polyline class="lic-canvas-trend-line" points="${data.points}"></polyline>` : ''}
+            ${latestPoint}
+        </svg>
+    `;
+}
+
+function formatLicCanvasValue(value, quantity, digits = 1, options = {}) {
+    if (!Number.isFinite(parseFloat(value))) return '-';
+    return getTankLiveDisplayValue(value, quantity, digits, options);
+}
+
+function updateLevelControllerCanvasTrendPanel(el, instrumentId, instrument) {
+    const panel = el.querySelector('.lic-canvas-trend-panel');
+    if (!panel) return;
+    const snapshot = getLicCanvasTargetSnapshot(instrumentId, instrument);
+    if (!snapshot) {
+        panel.hidden = true;
+        setLevelControllerCanvasAlarmState(instrumentId, el, null);
+        return;
+    }
+
+    panel.hidden = false;
+    const alarm = getLicCanvasLevelAlarm(snapshot);
+    const volumeUnit = getTankLiveDisplayUnit('volume');
+    const percentUnit = getTankLiveDisplayUnit('percent');
+    const levelUnit = getTankLiveDisplayUnit('head');
+    const alarmText = alarm ? `${alarm} alarm` : 'Normal';
+    panel.classList.toggle('lic-canvas-trend-alarm', !!alarm);
+    panel.innerHTML = `
+        <div class="lic-canvas-trend-header">
+            <strong>Liquid Level Trend</strong>
+            <span>${escapeObjectMarkup(alarmText)}</span>
+        </div>
+        ${renderLicCanvasTrendSvg(snapshot)}
+        <div class="lic-canvas-trend-metrics">
+            <div><span>Volume</span><strong>${escapeObjectMarkup(formatLicCanvasValue(snapshot.volume, 'volume', 1))}</strong><em>${escapeObjectMarkup(volumeUnit)}</em></div>
+            <div><span>Incr. Vol</span><strong>${escapeObjectMarkup(formatLicCanvasValue(snapshot.incrementVolume, 'volume', 2, { showSign: true }))}</strong><em>${escapeObjectMarkup(volumeUnit)}</em></div>
+            <div><span>Level</span><strong>${escapeObjectMarkup(formatPumpLiveNumber(snapshot.fillPercent, 1))}</strong><em>${escapeObjectMarkup(percentUnit)}</em></div>
+        </div>
+        <div class="lic-canvas-trend-foot">${escapeObjectMarkup(snapshot.targetId)} · ${escapeObjectMarkup(formatLicCanvasValue(snapshot.level, 'head', 2))} ${escapeObjectMarkup(levelUnit)}</div>
+    `;
+    setLevelControllerCanvasAlarmState(instrumentId, el, alarm);
+}
+
+function playLicLevelAlarmBeep() {
+    if (typeof window === 'undefined') return;
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return;
+    try {
+        licLevelAlarmAudioContext = licLevelAlarmAudioContext || new AudioContextCtor();
+        const context = licLevelAlarmAudioContext;
+        if (context.state === 'suspended' && typeof context.resume === 'function') {
+            context.resume().catch(() => {});
+        }
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(920, context.currentTime);
+        gain.gain.setValueAtTime(0.0001, context.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.18);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(context.currentTime);
+        oscillator.stop(context.currentTime + 0.2);
+    } catch {
+        // Browser audio can be blocked until a user gesture; visual alarm still remains active.
+    }
+}
+
+function syncLicLevelAlarmBeep() {
+    if (licLevelAlarmActiveIds.size > 0) {
+        if (!licLevelAlarmTimer && typeof window !== 'undefined' && typeof window.setInterval === 'function') {
+            playLicLevelAlarmBeep();
+            licLevelAlarmTimer = window.setInterval(playLicLevelAlarmBeep, 1200);
+        }
+        return;
+    }
+    if (licLevelAlarmTimer && typeof window !== 'undefined' && typeof window.clearInterval === 'function') {
+        window.clearInterval(licLevelAlarmTimer);
+        licLevelAlarmTimer = null;
+    }
+}
+
+function setLevelControllerCanvasAlarmState(instrumentId, el, alarm) {
+    const active = alarm === 'HLL' || alarm === 'LLL';
+    el.classList.toggle('lic-level-alarm-active', active);
+    el.classList.toggle('lic-level-alarm-high', alarm === 'HLL');
+    el.classList.toggle('lic-level-alarm-low', alarm === 'LLL');
+    if (active) {
+        licLevelAlarmActiveIds.add(instrumentId);
+        el.dataset.levelAlarm = alarm;
+    } else {
+        licLevelAlarmActiveIds.delete(instrumentId);
+        delete el.dataset.levelAlarm;
+    }
+    syncLicLevelAlarmBeep();
 }
 
 function updateSourceLiveParameterPanel(el, nodeId, node, visualStatus) {
@@ -1221,12 +1522,24 @@ function updateObjectOperatingStatusVisual(nodeId) {
         return;
     }
 
+    if (node.type === 'levelController') {
+        updateLevelControllerCanvasTrendPanel(el, nodeId, node);
+        el.title = el.dataset?.levelAlarm
+            ? `LIC level alarm: ${el.dataset.levelAlarm}`
+            : 'Level controller liquid level trend';
+        return;
+    }
+
     delete el.dataset.operatingStatus;
     el.title = '';
 }
 
 function updateAllObjectOperatingStatusVisuals() {
     Object.keys(globalModel).forEach(updateObjectOperatingStatusVisual);
+    licLevelAlarmActiveIds.forEach(instrumentId => {
+        if (!globalModel[instrumentId]) licLevelAlarmActiveIds.delete(instrumentId);
+    });
+    syncLicLevelAlarmBeep();
     updateCanvasWarningPanel();
 }
 
@@ -1600,6 +1913,9 @@ function getObjectMarkup(type, nodeId, desc) {
     const tankLivePanel = type === 'tank'
         ? '<div class="tank-live-params" aria-label="Live tank boundary and inventory parameters"></div>'
         : '';
+    const licCanvasTrendPanel = type === 'levelController'
+        ? '<div class="lic-canvas-trend-panel" data-lic-canvas-trend hidden aria-label="Liquid level trend chart beside LIC"></div>'
+        : '';
 
     return `
         <div class="object-icon">
@@ -1612,6 +1928,7 @@ function getObjectMarkup(type, nodeId, desc) {
         ${sourceLivePanel}
         ${sinkLivePanel}
         ${tankLivePanel}
+        ${licCanvasTrendPanel}
         ${type === 'lineMonitor' ? getLineMonitorReadoutMarkup() : ''}
     `;
 }

@@ -7,17 +7,20 @@ const indexHtml = fs.readFileSync(path.join(projectRoot, 'index.html'), 'utf8');
 const styles = fs.readFileSync(path.join(projectRoot, 'style.css'), 'utf8');
 const canvasManager = fs.readFileSync(path.join(projectRoot, 'ui/canvas-manager.js'), 'utf8');
 
-assert(indexHtml.includes('id="toolbarObjectMenuButton"'), 'Mobile object overflow button should exist in the ribbon');
-assert(indexHtml.includes('id="toolbarObjectMenu" role="menu"'), 'Grouped object overflow menu should expose menu semantics');
-assert(indexHtml.includes('aria-controls="toolbarObjectMenu"'), 'Object overflow button should control the grouped menu');
+assert(indexHtml.includes('id="toolbarObjectMenuButton"'), 'Legacy object overflow button markup may remain for compatibility');
+assert(indexHtml.includes('id="toolbarObjectMenu" role="menu"'), 'Legacy grouped object menu markup may remain for compatibility');
 
 assert(styles.includes('.toolbar-object-menu-container'), 'Object overflow menu container should be styled');
-assert(styles.includes('@media (max-width: 640px)') && styles.includes('.toolbar-object-menu-container {\n        order: 8;\n        display: block;'), 'Object overflow menu should remain available as a mobile fallback');
+assert(styles.includes('Locked UX: the ribbon must not show the large Objects button'), 'Hidden Objects ribbon button should be documented as locked UX');
+assert(styles.includes('.toolbar-object-menu-container {\n    position: relative;\n    flex: 0 0 auto;\n    /* Locked UX: the ribbon must not show the large Objects button. */\n    display: none !important;'), 'Object overflow menu button should be hidden in the ribbon');
+assert(styles.includes('@media (max-width: 640px)') && styles.includes('.toolbar-object-menu-container {\n        order: 8;\n        display: none !important;'), 'Object overflow menu button should remain hidden on mobile/tablet widths');
+assert(indexHtml.includes('.toolbar-object-menu-container{position:relative;flex:0 0 auto;display:none!important}'), 'Critical CSS should hide the Objects button before full stylesheet loads');
+assert(indexHtml.includes('.toolbar-object-menu-container{order:8;display:none!important}'), 'Critical mobile CSS should keep the Objects button hidden');
 assert(styles.includes('@media (max-width: 420px)') && styles.includes('.toolbar-palette {\n        display: flex;'), 'Very small screens should keep the object palette visible');
 assert(!styles.includes('.toolbar-palette {\n        display: none;'), 'Mobile object palette should not be hidden behind the grouped menu');
 assert(styles.includes('flex: 1 0 100%;') && styles.includes('min-width: 100%;'), 'Mobile object palette should get a full-width horizontal scroll row');
 assert(styles.includes('overflow-x: auto;') && styles.includes('-webkit-overflow-scrolling: touch'), 'Mobile object palette should prioritize touch horizontal scrolling');
-assert(styles.includes('.toolbar-object-menu-grid'), 'Grouped object menu should use a responsive grid');
+assert(styles.includes('.toolbar-object-menu-grid'), 'Legacy grouped object menu styling may remain dormant');
 
 assert(canvasManager.includes('function renderToolbarObjectMenu()'), 'Grouped object menu should be rendered from the shared toolbar catalog');
 assert(canvasManager.includes('function getToolbarObjectMenuItems('), 'Grouped object menu should expose a reusable item list for keyboard navigation');
@@ -31,10 +34,10 @@ assert(canvasManager.includes("closeToolbarObjectMenu({ focusButton: true })"), 
 
 console.log(JSON.stringify({
     passed: true,
-    groupedObjectOverflow: true,
+    objectButtonHidden: true,
     mobilePaletteVisible: true,
     horizontalScrollPrimary: true,
-    mobileMenu: true,
+    mobileMenuDormant: true,
     catalogDriven: true,
     accessibleDisclosure: true
 }, null, 2));

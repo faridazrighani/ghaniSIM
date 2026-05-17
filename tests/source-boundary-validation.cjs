@@ -412,6 +412,8 @@ const multiSourceTank = vm.runInContext(`
                 pressureInputBasis: 'Gauge',
                 pressure: 0,
                 elevation: 0,
+                diameter: 5,
+                tankHeight: 6,
                 liquidLevel: 5
             }
         },
@@ -460,13 +462,87 @@ assert(multiSourceTank.sourceFeedFlows.length === 2, 'Expected tank to expose pe
 assertClose('multi-source SRC-100 feed flow', multiSourceTank.sourceFeedFlows[0].flow, 104.81, 0.001);
 assertClose('multi-source SRC-103 feed flow', multiSourceTank.sourceFeedFlows[1].flow, 20.19, 0.001);
 assertClose('multi-source total SRC feed flow', multiSourceTank.sourceFeedFlow, 125, 0.001);
+assertClose('multi-source dynamic SRC feed flow', multiSourceTank.dynamicSourceFeedFlow, 125, 0.001);
 assertClose('multi-source tank net flow', multiSourceTank.netFlow, 125, 0.001);
+assertClose('multi-source dynamic tank net flow', multiSourceTank.dynamicNetFlow, 125, 0.001);
+assertClose('multi-source tank level rate', multiSourceTank.levelRate, 6.366, 0.001);
 assert(multiSourceTank.levelTrend === 'Rising', 'Expected positive tank net flow to show Rising level trend');
 assert(multiSourceTank.status === 'Advisory', 'Expected inventory imbalance alone to be advisory');
 assert(
-    multiSourceTank.warnings.some(item => item.includes('Tank inventory advisory')),
+    multiSourceTank.advisories.some(item => item.includes('Tank inventory advisory')),
     'Expected inventory advisory message for non-zero tank net flow'
 );
+
+const initialInventoryTank = vm.runInContext(`
+(() => {
+    Object.keys(globalModel).forEach(key => delete globalModel[key]);
+    Object.assign(globalModel, {
+        FLUID: {
+            type: 'fluid',
+            name: 'Fluid Basis',
+            props: { density: 997, vaporPressure: 0.031698 }
+        },
+        'TK-200': {
+            type: 'tank',
+            name: 'TK-200',
+            props: {
+                pressureInputBasis: 'Gauge',
+                pressure: 0,
+                elevation: 0,
+                diameter: 5,
+                tankHeight: 6,
+                liquidLevel: 3
+            }
+        },
+        'SRC-200': {
+            type: 'source',
+            name: 'SRC-200',
+            props: {
+                sourceType: 'Open Tank / Reservoir',
+                flow: 50,
+                dynamicContributionMode: 'Initial Inventory Only'
+            }
+        },
+        'PIPE-DRAIN': {
+            type: 'pipe',
+            name: 'PIPE-DRAIN',
+            props: {},
+            results: {
+                pressureCalculated: true,
+                flow: 50
+            }
+        },
+        'SNK-200': {
+            type: 'sink',
+            name: 'SNK-200',
+            props: {}
+        }
+    });
+    connections.splice(0, connections.length, {
+        from: 'TK-200',
+        fromPort: '.port.outlet',
+        to: 'SNK-200',
+        toPort: '.port.inlet',
+        pipeId: 'PIPE-DRAIN',
+        connectionType: 'hydraulic'
+    });
+    sourceLinks.splice(0, sourceLinks.length, {
+        sourceId: 'SRC-200',
+        targetId: 'TK-200',
+        targetPort: '.port.inlet',
+        connectionType: 'semantic',
+        attachmentType: 'source-boundary',
+        visualStyle: 'dashed'
+    });
+    updateTankPressureReadout('TK-200');
+    return globalModel['TK-200'].results;
+})()
+`, context);
+assertClose('initial inventory steady SRC feed', initialInventoryTank.sourceFeedFlow, 50, 0.001);
+assertClose('initial inventory dynamic SRC feed', initialInventoryTank.dynamicSourceFeedFlow, 0, 0.001);
+assertClose('initial inventory steady net flow', initialInventoryTank.netFlow, 0, 0.001);
+assertClose('initial inventory dynamic net flow drains', initialInventoryTank.dynamicNetFlow, -50, 0.001);
+assert(initialInventoryTank.dynamicLevelTrend === 'Falling', 'Initial Inventory Only SRC should allow pump outlet flow to drain tank dynamically');
 
 console.log(JSON.stringify({
     passed: true,
@@ -483,6 +559,7 @@ console.log(JSON.stringify({
         sourceFeedFlows: multiSourceTank.sourceFeedFlows,
         totalSourceFeedFlow: multiSourceTank.sourceFeedFlow,
         netFlow: multiSourceTank.netFlow,
+        levelRate: multiSourceTank.levelRate,
         levelTrend: multiSourceTank.levelTrend,
         status: multiSourceTank.status
     },

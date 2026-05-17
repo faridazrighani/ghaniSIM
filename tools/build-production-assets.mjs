@@ -217,6 +217,8 @@ function minifyCss(source) {
     .replace(/\s+/g, ' ')
     .replace(/\s*([{}:;,>~()])\s*/g, '$1')
     .replace(/;}/g, '}')
+    .replace(/@media\(/g, '@media (')
+    .replace(/\)and\(/g, ') and (')
     .replace(/\s*!important/g, '!important')
     .trim();
 }

@@ -59,6 +59,8 @@ assert(smokeTool.includes('Selected-object action panel must not render on the c
 assert(smokeTool.includes('selectionActionPanelRemoved'), 'Reusable smoke output should report removed selected-object action panel');
 assert(smokeTool.includes('Pan / scroll canvas hint must not render on the canvas'), 'Reusable smoke tool should enforce removed canvas pan hint');
 assert(smokeTool.includes('canvasPanHintRemoved'), 'Reusable smoke output should report removed canvas pan hint');
+assert(smokeTool.includes('Objects ribbon button must stay hidden'), 'Reusable smoke tool should enforce hidden Objects ribbon button');
+assert(smokeTool.includes('objectsRibbonButtonHidden'), 'Reusable smoke output should report hidden Objects ribbon button');
 assert(smokeTool.includes('thesis identity should remain visible in the long ribbon'), 'Reusable smoke tool should enforce visible desktop/tablet long thesis identity');
 assert(smokeTool.includes('thesis identity text should not be clipped in the long ribbon'), 'Reusable smoke tool should enforce unclipped desktop/tablet long thesis identity text');
 assert(smokeTool.includes('desktopAcademicIdentityUnclipped'), 'Reusable smoke output should report desktop thesis identity clipping status');
@@ -66,6 +68,9 @@ assert(smokeTool.includes('thesis identity text must stay locked to the approved
 assert(smokeTool.includes('desktopAcademicIdentityLocked'), 'Reusable smoke output should report desktop thesis identity lock status');
 assert(smokeTool.includes('longAcademicIdentityLocked'), 'Reusable smoke output should report long desktop/tablet thesis identity lock status');
 assert(smokeTool.includes('longAcademicIdentityInViewport'), 'Reusable smoke output should report long desktop/tablet thesis identity viewport visibility');
+assert(smokeTool.includes('compact thesis identity should fill the space to the right of Solve'), 'Reusable smoke tool should enforce compact thesis identity beside Solve');
+assert(smokeTool.includes('compactAcademicIdentityLocked'), 'Reusable smoke output should report compact thesis identity lock status');
+assert(smokeTool.includes("'tablet-compact-768'"), 'Reusable smoke tool should include a 768px compact tablet viewport');
 assert(smokeTool.includes('tabletLandscapeNoticeVisible'), 'Reusable smoke output should report tablet portrait landscape notice status');
 assert(smokeTool.includes('Solve button should stay aligned to the right edge of the desktop ribbon'), 'Reusable smoke tool should enforce desktop Solve right alignment');
 assert(smokeTool.includes('desktopSolveRightAligned'), 'Reusable smoke output should report desktop Solve right alignment');

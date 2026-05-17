@@ -6,6 +6,7 @@ const projectRoot = path.resolve(__dirname, '..');
 const canvasManager = fs.readFileSync(path.join(projectRoot, 'ui/canvas-manager.js'), 'utf8');
 const connectionsRenderer = fs.readFileSync(path.join(projectRoot, 'ui/connections-renderer.js'), 'utf8');
 const stateManager = fs.readFileSync(path.join(projectRoot, 'core/state-manager.js'), 'utf8');
+const objectProperties = fs.readFileSync(path.join(projectRoot, 'properties/object-properties.js'), 'utf8');
 const styles = fs.readFileSync(path.join(projectRoot, 'style.css'), 'utf8');
 
 function assert(condition, message) {
@@ -17,6 +18,8 @@ assert(canvasManager.includes('Attach to tank/vessel level'), 'LIC context menu 
 assert(canvasManager.includes("attachMode === 'level'"), 'Canvas connect mode should distinguish LIC level attachment from pipe tap attachment');
 assert(connectionsRenderer.includes('instrument-level-line'), 'LIC-to-tank link should render with a distinct instrument level line');
 assert(stateManager.includes('function attachInstrumentToLevelTarget'), 'State manager should support LIC-to-tank attachment');
+assert(objectProperties.includes('Apply SP to Tank Level'), 'LIC properties should expose an explicit apply-setpoint level action');
+assert(objectProperties.includes('Required Outlet Flow'), 'LIC properties should show required outlet flow for balanced tank level');
 assert(styles.includes('.instrument-anchor'), 'Styles should include instrument signal anchors');
 
 const context = {

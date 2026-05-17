@@ -14,15 +14,19 @@ assert(canvasManager.includes('function buildTankLiveParameterRows(nodeId, node)
 assert(canvasManager.includes('function updateTankLiveParameterPanel(el, nodeId, node, visualStatus)'), 'Tank status refresh should update the live tank panel');
 assert(canvasManager.includes('updateTankLiveParameterPanel(el, nodeId, node, tankVisualStatus)'), 'Tank visual update should refresh live tank parameters');
 
-['Boundary', 'Surface Press.', 'Surface Elev.', 'Outlet Elev.', 'Inventory', 'Level', 'Level %', 'Volume', 'Flow', 'Outlet Flow', 'Net Flow', 'Trend'].forEach(label => {
+['Boundary', 'Surface Press.', 'Surface Elev.', 'Outlet Elev.', 'Inventory', 'Level', 'Level %', 'Volume', 'Dynamic', 'Sim Time', 'Last Step', 'Flow', 'Pipe Inlet', 'SRC Feed', 'Dyn SRC', 'Outlet Flow', 'Net Flow', 'Dyn Net', 'Level Rate', 'Dyn Rate', 'Trend', 'Dyn Trend'].forEach(label => {
     assert(canvasManager.includes(`label: '${label}'`), `Live tank panel should include ${label}`);
 });
 
 assert(canvasManager.includes('tank base elevation + current liquid level'), 'Tank live panel should explain liquid surface elevation');
 assert(canvasManager.includes('solid hydraulic path starts'), 'Tank live panel should identify outlet nozzle as hydraulic path start');
 assert(canvasManager.includes('Tank inventory balance = inlet flow - outlet flow'), 'Tank live panel should explain net-flow balance');
+assert(canvasManager.includes('Dynamic inventory balance used by realtime/step simulation'), 'Tank live panel should explain dynamic net-flow balance');
+assert(canvasManager.includes('Projected level rate = net flow divided by tank cross-sectional area'), 'Tank live panel should explain level-rate balance');
+assert(canvasManager.includes('Simulate > Step Dynamic Inventory'), 'Tank live panel should explain dynamic inventory stepping');
 assert(canvasManager.includes("getTankLiveDisplayUnit('volume')"), 'Tank live panel should use quantity registry volume unit');
 assert(canvasManager.includes("getTankLiveDisplayUnit('flow')"), 'Tank live panel should use quantity registry flow unit');
+assert(canvasManager.includes("getTankLiveDisplayUnit('levelRate'"), 'Tank live panel should use quantity registry level-rate unit');
 assert(canvasManager.includes("getTankLiveDisplayUnit('pressureAbs')"), 'Tank live panel should use absolute pressure display units');
 assert(canvasManager.includes("getTankLiveDisplayUnit('head')"), 'Tank live panel should use head/elevation display units');
 

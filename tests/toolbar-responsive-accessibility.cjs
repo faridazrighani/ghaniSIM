@@ -23,11 +23,15 @@ assert(styles.includes('mask-image: linear-gradient') && styles.includes('-webki
 assert(styles.includes('scroll-snap-align: start'), 'Toolbar groups should align when the palette is horizontally scrolled');
 assert(styles.includes('width: 44px') && styles.includes('min-height: 44px'), 'Mobile toolbar tools should keep compact readable touch targets');
 assert(styles.includes('flex: 1 0 100%;') && styles.includes('max-width: 100%;'), 'Mobile toolbar palette should occupy a full-width scroll row');
+assert(styles.includes('@media (max-height: 560px) and (orientation: landscape)') && styles.includes('.menu-bar {\n        display: flex;\n        min-height: 28px;'), 'iPhone landscape should keep a compact menu bar visible');
 assert(!styles.includes('@media (max-width: 420px) {\n    .toolbar-palette {\n        display: none;'), 'Very small mobile widths should keep the object palette visible');
+assert(styles.includes('Locked UX: the ribbon must not show the large Objects button'), 'Objects ribbon button should stay hidden by locked UX rule');
+assert(styles.includes('.toolbar-object-menu-container {\n        order: 8;\n        display: none !important;'), 'Objects ribbon button should stay hidden on mobile/tablet widths');
 
 assert(indexHtml.includes('@media (max-width:900px)') && indexHtml.includes('.toolbar-palette{flex:1 1 auto'), 'Critical CSS should include tablet/mobile palette scroll behavior');
 assert(indexHtml.includes('@media (max-width:640px)') && indexHtml.includes('.toolbar-palette{order:20;display:flex;min-height:50px;flex:1 0 100%'), 'Critical CSS should include full-width mobile object palette scroll behavior');
 assert(indexHtml.includes('@media (max-width:640px)') && indexHtml.includes('.toolbar-tool{width:44px;min-height:44px'), 'Critical CSS should include compact mobile toolbar touch target sizing');
+assert(indexHtml.includes('.toolbar-object-menu-container{order:8;display:none!important}'), 'Critical CSS should keep the Objects button hidden on mobile/tablet widths');
 
 console.log(JSON.stringify({
     passed: true,

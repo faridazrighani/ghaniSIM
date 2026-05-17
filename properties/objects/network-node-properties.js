@@ -45,7 +45,13 @@ const SOURCE_SCHEMA = {
         options: ['Volumetric Flow', 'Mass Flow', 'Solve from Network']
     },
     flow: { label: 'Volumetric Flow', unit: 'm3/h', type: 'number', default: 9.5 },
-    massFlow: { label: 'Mass Flow', unit: 'kg/h', type: 'number', default: 9500 }
+    massFlow: { label: 'Mass Flow', unit: 'kg/h', type: 'number', default: 9500 },
+    dynamicContributionMode: {
+        label: 'Dynamic Contribution Mode',
+        type: 'select',
+        default: 'Continuous Feed to Tank',
+        options: ['Continuous Feed to Tank', 'Initial Inventory Only', 'Inactive']
+    }
 };
 
 const SINK_SCHEMA = {

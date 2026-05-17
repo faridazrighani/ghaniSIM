@@ -7,11 +7,15 @@ const batch18SmokeScreenshot = path.join(projectRoot, 'docs/ux_ui_fix_batch18_ta
 const finalSmokeScreenshots = [
     'docs/ux_ui_final_smoke_desktop.png',
     'docs/ux_ui_final_smoke_tablet-landscape.png',
+    'docs/ux_ui_final_smoke_iphone-se.png',
+    'docs/ux_ui_final_smoke_iphone-se-landscape.png',
     'docs/ux_ui_final_smoke_mobile.png'
 ].map(file => path.join(projectRoot, file));
 const mandatoryAboutScreenshots = [
     'docs/ux_ui_final_smoke_about_desktop.png',
     'docs/ux_ui_final_smoke_about_tablet-landscape.png',
+    'docs/ux_ui_final_smoke_about_iphone-se.png',
+    'docs/ux_ui_final_smoke_about_iphone-se-landscape.png',
     'docs/ux_ui_final_smoke_about_mobile.png'
 ].map(file => path.join(projectRoot, file));
 
@@ -19,7 +23,7 @@ function assert(condition, message) {
     if (!condition) throw new Error(message);
 }
 
-assert(audit.includes('Practical fix batches 1-24 applied'), 'Audit executive summary should mention Batch 24 closure');
+assert(audit.includes('Practical fix batches 1-29 applied'), 'Audit executive summary should mention Batch 29 closure');
 assert(audit.includes('### Practical Fix Batch 14 Standards'), 'Audit should document Batch 14 standards');
 assert(audit.includes('### Practical Fix Batch 15 Standards'), 'Audit should document Batch 15 standards');
 assert(audit.includes('### Practical Fix Batch 16 Standards'), 'Audit should document Batch 16 standards');
@@ -31,6 +35,11 @@ assert(audit.includes('### Practical Fix Batch 21 Standards'), 'Audit should doc
 assert(audit.includes('### Practical Fix Batch 22 Standards'), 'Audit should document Batch 22 standards');
 assert(audit.includes('### Practical Fix Batch 23 Standards'), 'Audit should document Batch 23 standards');
 assert(audit.includes('### Practical Fix Batch 24 Standards'), 'Audit should document Batch 24 standards');
+assert(audit.includes('### Practical Fix Batch 25 Standards'), 'Audit should document Batch 25 standards');
+assert(audit.includes('### Practical Fix Batch 26 Standards'), 'Audit should document Batch 26 standards');
+assert(audit.includes('### Practical Fix Batch 27 Standards'), 'Audit should document Batch 27 standards');
+assert(audit.includes('### Practical Fix Batch 28 Standards'), 'Audit should document Batch 28 standards');
+assert(audit.includes('### Practical Fix Batch 29 Standards'), 'Audit should document Batch 29 standards');
 assert(audit.includes('tests/ux-ui-audit-resolution.cjs'), 'Audit should list this resolution test');
 assert(audit.includes('tests/toolbar-object-overflow.cjs'), 'Audit should list the grouped object overflow test');
 assert(audit.includes('first-run-basis-flow.cjs'), 'Audit should list the first-run basis flow regression test');
@@ -44,7 +53,7 @@ assert(audit.includes('Status: **Resolved in Batch 2 and Batch 5; superseded and
 assert(audit.includes('Status: **Resolved in Batch 8, Batch 15, and Batch 21**'), 'Audit should map toolbar mobile usability to Batch 8, Batch 15, and Batch 21');
 assert(audit.includes('The original fix order has been executed through the practical fix batches'), 'Suggested fix order should be converted to resolution mapping');
 assert(!audit.includes('No application code was changed in this audit pass'), 'Final audit status should not claim no code changed after practical fixes');
-assert(audit.includes('Audit complete, with practical UX/UI fixes applied and verified through Batch 24'), 'Final audit status should reflect practical fixes');
+assert(audit.includes('Audit complete, with practical UX/UI fixes applied and verified through Batch 29'), 'Final audit status should reflect practical fixes');
 assert(audit.includes('Batch 8 to Batch 13 browser smoke checks found no console errors'), 'Browser check summary should reflect post-fix verification');
 assert(audit.includes('Batch 18 browser smoke confirmed object Task Window focus return'), 'Browser check summary should include the Batch 18 focus-return smoke test');
 assert(audit.includes('Batch 19 static verification and reusable browser smoke confirmed the ribbon no longer renders `Select` or `Connect Pipe`'), 'Browser/static check summary should include the Batch 19 ribbon decision');
@@ -53,12 +62,18 @@ assert(audit.includes('Batch 21 static verification and reusable browser smoke c
 assert(audit.includes('Batch 22 static verification and reusable browser smoke confirmed the `Pan / scroll canvas` pill no longer renders'), 'Browser/static check summary should include the Batch 22 pan hint decision');
 assert(audit.includes('Batch 23 static verification and reusable browser smoke confirmed the desktop ribbon thesis identity remains visible without clipped text'), 'Browser/static check summary should include the Batch 23 thesis identity decision');
 assert(audit.includes('Batch 24 static verification and reusable browser smoke locked the exact desktop Academic identity wording, order, and four-line structure'), 'Browser/static check summary should include the Batch 24 thesis identity wording lock');
+assert(audit.includes('Batch 25 static verification locked the mobile pump live-panel width and label/value/unit overlap protection'), 'Browser/static check summary should include the Batch 25 mobile pump live-panel lock');
+assert(audit.includes('Batch 26 static verification and reusable browser smoke locked the hidden `Objects` ribbon button'), 'Browser/static check summary should include the Batch 26 hidden Objects button lock');
+assert(audit.includes('Batch 27 static verification and reusable browser smoke locked the compact no-logo academic identity to the right of `Solve`'), 'Browser/static check summary should include the Batch 27 compact identity lock');
+assert(audit.includes('Batch 28 static verification and reusable browser smoke locked the compact no-logo academic identity on the same row as `Solve` at iPhone SE 375 x 667'), 'Browser/static check summary should include the Batch 28 iPhone compact identity lock');
+assert(audit.includes('Batch 29 static verification and reusable browser smoke locked the compact landscape menu bar as visible at iPhone SE 667 x 375'), 'Browser/static check summary should include the Batch 29 iPhone landscape menu bar lock');
 assert(audit.includes('context-menu-first connection workflow is locked in `tests/connection-workflow-discoverability.cjs`'), 'Final status should lock the context-menu-first connection workflow');
 assert(audit.includes('selected-object action-panel removal is locked in `tests/canvas-selection-actions.cjs`'), 'Final status should lock removal of the selected-object action panel');
-assert(audit.includes('mobile object palette visibility and horizontal scroll are locked in `tests/toolbar-object-overflow.cjs`'), 'Final status should lock mobile object palette visibility');
+assert(audit.includes('mobile object palette visibility, horizontal scroll, hidden `Objects` ribbon button, compact academic identity beside `Solve`, iPhone SE same-row compact identity behavior, and iPhone SE landscape menu bar visibility are locked in `tests/toolbar-object-overflow.cjs`'), 'Final status should lock mobile object palette visibility, hidden Objects button, compact identity, iPhone SE same-row behavior, and landscape menu bar visibility');
 assert(audit.includes('canvas pan-hint removal is locked in `tests/canvas-pan-affordance.cjs`'), 'Final status should lock canvas pan hint removal');
 assert(audit.includes('desktop thesis identity readability is locked in `tests/academic-identity-layout.cjs`'), 'Final status should lock desktop thesis identity readability');
 assert(audit.includes('exact desktop thesis identity wording and line breaks are locked in `tests/academic-identity-layout.cjs` and `tools/smoke-first-run-basis-flow.cjs`'), 'Final status should lock exact desktop thesis identity wording and line breaks');
+assert(audit.includes('mobile pump live-panel readability is locked in `tests/pump-live-parameter-panel.cjs`'), 'Final status should lock mobile pump live-panel readability');
 assert(audit.includes('docs/ux_ui_fix_batch18_task_window_focus_smoke.png'), 'Batch 18 browser smoke screenshot should be referenced');
 assert(fs.existsSync(batch18SmokeScreenshot), 'Batch 18 browser smoke screenshot should exist on disk');
 assert(audit.includes('Final viewport smoke confirmed the thesis startup and first-run basis flow'), 'Audit should record final thesis startup and first-run basis flow smoke evidence');

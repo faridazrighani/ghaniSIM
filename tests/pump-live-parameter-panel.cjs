@@ -45,6 +45,11 @@ assert(styles.includes('.pump-live-params-risk'), 'Live parameter panel should e
 assert(styles.includes('.pump-live-param-row'), 'Live parameter rows should use compact row styling');
 assert(styles.includes('.pump-live-param-section'), 'Live pump panel section headers should be styled');
 assert(styles.includes('grid-template-columns: 104px minmax(36px, 1fr) auto'), 'Pump live panel should reserve enough label width for clear labels');
+assert(styles.includes('Locked UX: keep mobile pump live labels, values, and units readable'), 'Mobile pump live-panel readability lock should be documented in CSS');
+assert(styles.includes('Locked UX: do not collapse these columns'), 'Mobile pump live-panel column lock should be documented in CSS');
+assert(styles.includes('min-width: 214px'), 'Mobile pump live panel minimum width should remain locked for readability');
+assert(styles.includes('max-width: min(248px, calc(100vw - 24px))'), 'Mobile pump live panel should stay readable without exceeding the viewport');
+assert(styles.includes('overflow: hidden') && styles.includes('text-overflow: ellipsis'), 'Live panel labels should not overlap live values when space is tight');
 
 console.log(JSON.stringify({
     passed: true,

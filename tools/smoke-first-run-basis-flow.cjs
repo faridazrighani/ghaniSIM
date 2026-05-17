@@ -17,6 +17,9 @@ const viewports = [
     { name: 'tablet-ipad-1180', width: 1180, height: 820 },
     { name: 'tablet-landscape', width: 1024, height: 768 },
     { name: 'tablet-portrait', width: 820, height: 1180 },
+    { name: 'tablet-compact-768', width: 768, height: 1024 },
+    { name: 'iphone-se', width: 375, height: 667 },
+    { name: 'iphone-se-landscape', width: 667, height: 375 },
     { name: 'mobile', width: 390, height: 844 }
 ];
 
@@ -26,7 +29,14 @@ const expectedDesktopAcademicIdentity = [
     'Potential in Centrifugal Pumps Based on NPSH Analysis for Various Fluids.',
     'Bachelor\u2019s Thesis - Farid Azrighani et al.'
 ];
+const expectedCompactAcademicIdentity = [
+    'UNTIRTA \u2013 Mechanical Engineering',
+    'Pumping Simulation for NPSH Analysis',
+    'Cavitation Potential in Centrifugal Pumps',
+    'Bachelor\u2019s Thesis - Farid Azrighani et al.'
+];
 const longAcademicIdentityViewports = new Set(['desktop', 'tablet-large-1366', 'tablet-ipad-1180', 'tablet-landscape']);
+const compactAcademicIdentityViewports = new Set(['tablet-portrait', 'tablet-compact-768', 'iphone-se', 'iphone-se-landscape', 'mobile']);
 
 function addBundledPlaywrightToNodePath() {
     if (process.env.NODE_PATH) {
@@ -121,6 +131,7 @@ async function readBasisFlowState(page) {
             return !el.hidden && style.display !== 'none' && style.visibility !== 'hidden' && el.getClientRects().length > 0;
         };
         const canvas = document.querySelector('#canvas');
+        const menuBar = document.querySelector('.menu-bar');
         const ribbon = document.querySelector('.ribbon');
         const task = document.querySelector('#taskWindow');
         const about = document.querySelector('#aboutModal');
@@ -131,6 +142,7 @@ async function readBasisFlowState(page) {
         const objectMenu = document.querySelector('#toolbarObjectMenuButton');
         const toolbarPalette = document.querySelector('#toolbarPalette');
         const academicIdentity = document.querySelector('.academic-identity');
+        const compactAcademicIdentity = document.querySelector('.academic-compact-identity');
         const selectButton = document.querySelector('#btn-mode-select');
         const connectButton = document.querySelector('#btn-mode-connect');
         const solveButton = document.querySelector('#btn-solve');
@@ -141,16 +153,21 @@ async function readBasisFlowState(page) {
         const academicTextNodes = academicIdentity
             ? Array.from(academicIdentity.querySelectorAll('.academic-university, .academic-thesis-line, .academic-author')).filter(visible)
             : [];
+        const compactAcademicTextNodes = compactAcademicIdentity
+            ? Array.from(compactAcademicIdentity.querySelectorAll('span')).filter(visible)
+            : [];
         const isTextClipped = (el) => !!el && (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1);
         const readText = (el) => el.textContent.trim().replace(/\s+/g, ' ');
         const ribbonRect = ribbon?.getBoundingClientRect();
         const solveRect = solveButton?.getBoundingClientRect();
         const academicRect = academicIdentity?.getBoundingClientRect();
+        const compactAcademicRect = compactAcademicIdentity?.getBoundingClientRect();
         return {
             pfdObjects: canvas ? canvas.querySelectorAll('.pfd-object').length : -1,
             pageOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
             bodyOverflowX: document.body.scrollWidth - document.body.clientWidth,
             canvasOverflowX: canvas ? canvas.scrollWidth - canvas.clientWidth : null,
+            menuBarVisible: visible(menuBar),
             taskWindowVisible: visible(task),
             taskKind: task?.dataset?.kind || '',
             aboutVisible: visible(about),
@@ -164,6 +181,15 @@ async function readBasisFlowState(page) {
             academicIdentityInViewport: academicRect ? academicRect.left >= -1 && academicRect.right <= window.innerWidth + 1 : false,
             academicIdentityText: academicTextNodes.map(readText),
             academicIdentityTextClipped: academicTextNodes.some(isTextClipped),
+            compactAcademicIdentityVisible: visible(compactAcademicIdentity),
+            compactAcademicIdentityText: compactAcademicTextNodes.map(readText),
+            compactAcademicIdentityTextClipped: compactAcademicTextNodes.some(isTextClipped),
+            compactAcademicIdentityRightOfSolve: solveRect && compactAcademicRect
+                ? compactAcademicRect.left >= solveRect.right - 1
+                : false,
+            compactAcademicIdentitySameRowAsSolve: solveRect && compactAcademicRect
+                ? Math.abs(compactAcademicRect.top - solveRect.top) <= 12
+                : false,
             toolbarPaletteVisible: visible(toolbarPalette),
             toolbarPaletteClientWidth: toolbarPalette ? toolbarPalette.clientWidth : 0,
             toolbarPaletteScrollWidth: toolbarPalette ? toolbarPalette.scrollWidth : 0,
@@ -203,6 +229,9 @@ function validateResult(row) {
         if (state.canvasPanHintExists || state.canvasPanHintVisible) {
             throw new Error(`${row.viewport}: Pan / scroll canvas hint must not render on the canvas`);
         }
+        if (state.objectMenuVisible) {
+            throw new Error(`${row.viewport}: Objects ribbon button must stay hidden`);
+        }
     }
     if (!row.initial.taskWindowVisible || row.initial.taskKind !== 'fluid' || !row.initial.openSetupVisible) {
         throw new Error(`${row.viewport}: first-run Fluid Basis shell should be visible with Open Setup`);
@@ -241,6 +270,23 @@ function validateResult(row) {
             throw new Error(`${row.viewport}: thesis identity text must stay locked to the approved four-line desktop/tablet wording`);
         }
     }
+    if (compactAcademicIdentityViewports.has(row.viewport)) {
+        if (!row.afterApply.compactAcademicIdentityVisible) {
+            throw new Error(`${row.viewport}: compact thesis identity should fill the space to the right of Solve`);
+        }
+        if (row.afterApply.compactAcademicIdentityTextClipped) {
+            throw new Error(`${row.viewport}: compact thesis identity text should not be clipped`);
+        }
+        if (!row.afterApply.compactAcademicIdentityRightOfSolve) {
+            throw new Error(`${row.viewport}: compact thesis identity should sit to the right of Solve`);
+        }
+        if (!row.afterApply.compactAcademicIdentitySameRowAsSolve) {
+            throw new Error(`${row.viewport}: compact thesis identity should stay on the same row as Solve`);
+        }
+        if (JSON.stringify(row.afterApply.compactAcademicIdentityText) !== JSON.stringify(expectedCompactAcademicIdentity)) {
+            throw new Error(`${row.viewport}: compact thesis identity text must stay locked to the approved four-line wording`);
+        }
+    }
     if (row.viewport === 'desktop') {
         if (!row.afterApply.solveButtonVisible || row.afterApply.solveButtonRightInset < 0 || row.afterApply.solveButtonRightInset > 18) {
             throw new Error(`${row.viewport}: Solve button should stay aligned to the right edge of the desktop ribbon`);
@@ -249,9 +295,12 @@ function validateResult(row) {
     if (row.viewport === 'tablet-portrait' && !row.initial.tabletLandscapeNoticeVisible) {
         throw new Error(`${row.viewport}: tablet portrait should show the landscape orientation notice`);
     }
+    if (row.viewport === 'iphone-se-landscape' && !row.afterApply.menuBarVisible) {
+        throw new Error(`${row.viewport}: menu bar should remain visible in iPhone landscape`);
+    }
     if (row.afterApply.taskWindowVisible) throw new Error(`${row.viewport}: Apply should hide the Fluid Basis setup window`);
     if (row.afterApply.basisPillVisible) throw new Error(`${row.viewport}: Apply should hide the ribbon setup pill`);
-    if (!row.afterApply.compactStatusVisible && row.viewport !== 'mobile') {
+    if (!row.afterApply.compactStatusVisible && row.viewport !== 'mobile' && row.viewport !== 'iphone-se' && row.viewport !== 'iphone-se-landscape') {
         throw new Error(`${row.viewport}: confirmed compact basis status should remain visible on larger viewports`);
     }
 }
@@ -310,12 +359,19 @@ async function main() {
             aboutScreenshot: path.relative(projectRoot, row.aboutScreenshot).replace(/\\/g, '/'),
             screenshot: path.relative(projectRoot, row.screenshot).replace(/\\/g, '/'),
             mandatoryAboutVisible: row.initial.aboutVisible,
+            menuBarVisible: row.viewport === 'iphone-se-landscape' ? row.afterApply.menuBarVisible : undefined,
             ribbonModeButtonsHidden: !row.initial.ribbonSelectExists && !row.initial.ribbonConnectExists,
             selectionActionPanelRemoved: !row.initial.selectionActionsExists,
             canvasPanHintRemoved: !row.initial.canvasPanHintExists,
+            objectsRibbonButtonHidden: !row.initial.objectMenuVisible,
             longAcademicIdentityUnclipped: longAcademicIdentityViewports.has(row.viewport) ? !row.afterApply.academicIdentityTextClipped : undefined,
             longAcademicIdentityLocked: longAcademicIdentityViewports.has(row.viewport) ? JSON.stringify(row.afterApply.academicIdentityText) === JSON.stringify(expectedDesktopAcademicIdentity) : undefined,
             longAcademicIdentityInViewport: longAcademicIdentityViewports.has(row.viewport) ? row.afterApply.academicIdentityInViewport : undefined,
+            compactAcademicIdentityVisible: compactAcademicIdentityViewports.has(row.viewport) ? row.afterApply.compactAcademicIdentityVisible : undefined,
+            compactAcademicIdentityUnclipped: compactAcademicIdentityViewports.has(row.viewport) ? !row.afterApply.compactAcademicIdentityTextClipped : undefined,
+            compactAcademicIdentityLocked: compactAcademicIdentityViewports.has(row.viewport) ? JSON.stringify(row.afterApply.compactAcademicIdentityText) === JSON.stringify(expectedCompactAcademicIdentity) : undefined,
+            compactAcademicIdentityRightOfSolve: compactAcademicIdentityViewports.has(row.viewport) ? row.afterApply.compactAcademicIdentityRightOfSolve : undefined,
+            compactAcademicIdentitySameRowAsSolve: compactAcademicIdentityViewports.has(row.viewport) ? row.afterApply.compactAcademicIdentitySameRowAsSolve : undefined,
             tabletLandscapeNoticeVisible: row.viewport === 'tablet-portrait' ? row.initial.tabletLandscapeNoticeVisible : undefined,
             desktopAcademicIdentityUnclipped: row.viewport === 'desktop' ? !row.afterApply.academicIdentityTextClipped : undefined,
             desktopAcademicIdentityLocked: row.viewport === 'desktop' ? JSON.stringify(row.afterApply.academicIdentityText) === JSON.stringify(expectedDesktopAcademicIdentity) : undefined,

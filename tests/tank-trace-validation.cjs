@@ -95,9 +95,11 @@ assertClose('trace outlet submergence', trace.geometry.outletSubmergence, 2, 0.0
 assertClose('trace source feed flow', trace.flowBalance.sourceFeedFlow, 125, 0.001);
 assertClose('trace pipe inlet flow', trace.flowBalance.pipeInletFlow, 25, 0.001);
 assertClose('trace net flow', trace.flowBalance.netFlow, 110, 0.001);
+assertClose('trace level rate', trace.flowBalance.levelRate, 5.602, 0.001);
 assertClose('trace absolute pressure', trace.pressureVenting.operatingPressureAbsolute, 1.01325, 0.001);
 assert(findStep(trace, 'Total SRC Feed Flow').substitution.includes('SRC-100'), 'Expected source feed step to list SRC rows');
 assert(findStep(trace, 'Tank Net Flow').formula === 'Qnet = Qin - Qout', 'Expected net flow equation step');
+assert(findStep(trace, 'Tank Level Rate').formula === 'dL/dt = Qnet / A', 'Expected level rate equation step');
 assert(trace.references.some(item => item.includes('API 2000')), 'Expected API 2000 reference note');
 
 const vacuumTrace = buildDefaultTrace({
@@ -132,6 +134,7 @@ console.log(JSON.stringify({
     liquidVolume: trace.inventory.liquidVolume,
     sourceFeedFlow: trace.flowBalance.sourceFeedFlow,
     netFlow: trace.flowBalance.netFlow,
+    levelRate: trace.flowBalance.levelRate,
     operatingVacuum: vacuumTrace.pressureVenting.operatingVacuumMbar,
     outletSubmergence: outletTrace.geometry.outletSubmergence
 }, null, 2));

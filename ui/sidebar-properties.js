@@ -1827,6 +1827,13 @@ function renderSidebar(nodeId) {
                     return;
                 }
 
+                if (globalModel[n].type === 'source' && k === 'dynamicContributionMode') {
+                    if (typeof normalizeSourceProps === 'function') normalizeSourceProps(globalModel[n]);
+                    renderSidebar(n);
+                    updateSimulation({ renderSidebarAfter: false });
+                    return;
+                }
+
                 if (globalModel[n].type === 'source' && k === 'temperatureMode') {
                     if (typeof syncSourceTemperatureFromFluidBasis === 'function') {
                         syncSourceTemperatureFromFluidBasis(n);

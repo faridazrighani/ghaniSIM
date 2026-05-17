@@ -43,10 +43,12 @@ assert(vm.runInContext(`getSimulationSettings().basisConfirmed`, context) === fa
 vm.runInContext(`setUnitStandard(UNIT_STANDARD_SI, { markDirty: false })`, context);
 assert(vm.runInContext(`getDisplayUnit('pressureAbs')`, context) === 'kPa a', 'SI absolute pressure display unit should be kPa a');
 assert(vm.runInContext(`getDisplayUnit('flow')`, context) === 'm3/s', 'SI flow display unit should be m3/s');
+assert(vm.runInContext(`getDisplayUnit('levelRate')`, context) === 'm/s', 'SI level-rate display unit should be m/s');
 assertClose('1.01325 bar to kPa', vm.runInContext(`convertToDisplay(1.01325, 'pressureAbs')`, context), 101.325, 1e-9);
 assertClose('101.325 kPa to bar', vm.runInContext(`convertFromDisplay(101.325, 'pressureAbs')`, context), 1.01325, 1e-9);
 assertClose('3600 m3/h to m3/s', vm.runInContext(`convertToDisplay(3600, 'flow')`, context), 1, 1e-12);
 assertClose('1 m3/s to m3/h', vm.runInContext(`convertFromDisplay(1, 'flow')`, context), 3600, 1e-12);
+assertClose('3600 m/h to m/s', vm.runInContext(`convertToDisplay(3600, 'levelRate')`, context), 1, 1e-12);
 
 vm.runInContext(`setUnitStandard(UNIT_STANDARD_US, { markDirty: false })`, context);
 assert(vm.runInContext(`getDisplayUnit('pressureGauge')`, context) === 'psig', 'US gauge pressure display unit should be psig');
@@ -56,6 +58,7 @@ assertClose('77 F to 25 C', vm.runInContext(`convertFromDisplay(77, 'temperature
 assertClose('1 m3/h to gpm', vm.runInContext(`convertToDisplay(1, 'flow')`, context), 4.402867539, 1e-9);
 assertClose('4.402867539 gpm to m3/h', vm.runInContext(`convertFromDisplay(4.402867539, 'flow')`, context), 1, 1e-9);
 assertClose('1 m to ft', vm.runInContext(`convertToDisplay(1, 'head')`, context), 3.280839895, 1e-9);
+assertClose('1 m/h to ft/h', vm.runInContext(`convertToDisplay(1, 'levelRate')`, context), 3.280839895, 1e-9);
 assertClose('1 m diameter to inch', vm.runInContext(`convertToDisplay(1, 'diameter')`, context), 39.37007874, 1e-8);
 assertClose('1 kW to hp', vm.runInContext(`convertToDisplay(1, 'power')`, context), 1.34102209, 1e-8);
 assertClose('1 m2 to ft2', vm.runInContext(`convertToDisplay(1, 'area')`, context), 10.76391042, 1e-8);

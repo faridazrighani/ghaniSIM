@@ -17,6 +17,8 @@ const EQUIPMENT_SCHEMAS = {
     junction: JUNCTION_SCHEMA
 };
 
+const levelControllerTrendChartInstances = new Map();
+
 function copyDefaultValue(value) {
     if (Array.isArray(value)) return value.map(item => ({ ...item }));
     if (value && typeof value === 'object') return { ...value };
@@ -387,8 +389,8 @@ function renderTankSourceFeedFlowBreakdown(sourceFeedFlows = []) {
 
     return sourceFeedFlows.map(row => `
         <div class="tank-source-feed-row">
-            <span>${escapeHtml(row.sourceId || '-')}</span>
-            <strong>${escapeHtml(formatTankTraceDisplayValue(row.flow, 'm3/h'))}</strong>
+            <span>${escapeHtml(row.sourceId || '-')}${row.dynamicContributionMode ? ` / ${escapeHtml(row.dynamicContributionMode)}` : ''}</span>
+            <strong>${escapeHtml(formatTankTraceDisplayValue(row.flow, 'm3/h'))} / dyn ${escapeHtml(formatTankTraceDisplayValue(row.dynamicFlow ?? row.flow, 'm3/h'))}</strong>
         </div>
     `).join('');
 }
@@ -506,10 +508,12 @@ function renderTankCalculationTraceReport(trace) {
                 ${renderTankTraceTextMetric('Connected Pipes', (flow.connectedPipes || []).join(', ') || '-')}
                 ${renderTankTraceTextMetric('Connected Sources', (flow.connectedSources || []).join(', ') || '-')}
                 ${renderTankTraceMetric('Pipe Inlet Flow', flow.pipeInletFlow, 'm3/h')}
+                ${renderTankTraceMetric('Pipe Outlet Flow', flow.pipeOutletFlow, 'm3/h')}
                 ${renderTankTraceMetric('Total SRC Feed Flow', flow.sourceFeedFlow, 'm3/h')}
                 ${renderTankTraceMetric('Inlet Flow', flow.inletFlow, 'm3/h')}
                 ${renderTankTraceMetric('Outlet Flow', flow.outletFlow, 'm3/h')}
                 ${renderTankTraceMetric('Net Flow', flow.netFlow, 'm3/h')}
+                ${renderTankTraceMetric('Level Rate', flow.levelRate, 'm/h')}
                 ${renderTankTraceTextMetric('Level Trend', flow.levelTrend)}
             </div>
             <div class="pipe-trace-source-note">SRC Feed Flow Breakdown</div>
@@ -1884,6 +1888,7 @@ function updateAllSinkCalculationTraceReadouts() {
 function renderTankReadoutCards(node, tbody) {
     const results = node.results || {};
     const warnings = results.warnings || [];
+    const advisories = results.advisories || [];
     const tr = document.createElement('tr');
     tr.innerHTML = `
         <td colspan="2" style="padding: 10px 12px;">
@@ -1933,6 +1938,14 @@ function renderTankReadoutCards(node, tbody) {
                     <strong class="prop-value" data-key="tank-stagnation-pressure">${escapeHtml(formatTankTraceDisplayValue(results.stagnationPressure, 'bar a'))}</strong>
                 </div>
                 <div class="boundary-result-card">
+                    <span>Pipe Inlet Flow</span>
+                    <strong class="prop-value" data-key="tank-pipe-inlet-flow">${escapeHtml(formatTankTraceDisplayValue(results.pipeInletFlow, 'm3/h'))}</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Pipe Outlet Flow</span>
+                    <strong class="prop-value" data-key="tank-pipe-outlet-flow">${escapeHtml(formatTankTraceDisplayValue(results.pipeOutletFlow, 'm3/h'))}</strong>
+                </div>
+                <div class="boundary-result-card">
                     <span>Inlet Flow</span>
                     <strong class="prop-value" data-key="tank-inlet-flow">${escapeHtml(formatTankTraceDisplayValue(results.inletFlow, 'm3/h'))}</strong>
                 </div>
@@ -1945,12 +1958,32 @@ function renderTankReadoutCards(node, tbody) {
                     <strong class="prop-value" data-key="tank-source-feed-flow">${escapeHtml(formatTankTraceDisplayValue(results.sourceFeedFlow, 'm3/h'))}</strong>
                 </div>
                 <div class="boundary-result-card">
+                    <span>Dynamic SRC Feed</span>
+                    <strong class="prop-value" data-key="tank-dynamic-source-feed-flow">${escapeHtml(formatTankTraceDisplayValue(results.dynamicSourceFeedFlow, 'm3/h'))}</strong>
+                </div>
+                <div class="boundary-result-card">
                     <span>Net Flow</span>
                     <strong class="prop-value" data-key="tank-net-flow">${escapeHtml(formatTankTraceDisplayValue(results.netFlow, 'm3/h'))}</strong>
                 </div>
                 <div class="boundary-result-card">
+                    <span>Dynamic Net Flow</span>
+                    <strong class="prop-value" data-key="tank-dynamic-net-flow">${escapeHtml(formatTankTraceDisplayValue(results.dynamicNetFlow, 'm3/h'))}</strong>
+                </div>
+                <div class="boundary-result-card">
                     <span>Level Trend</span>
                     <strong class="prop-value" data-key="tank-level-trend">${escapeHtml(results.levelTrend || '-')}</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Dynamic Trend</span>
+                    <strong class="prop-value" data-key="tank-dynamic-level-trend">${escapeHtml(results.dynamicLevelTrend || '-')}</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Level Rate</span>
+                    <strong class="prop-value" data-key="tank-level-rate">${escapeHtml(formatTankTraceDisplayValue(results.levelRate, 'm/h'))}</strong>
+                </div>
+                <div class="boundary-result-card">
+                    <span>Dynamic Level Rate</span>
+                    <strong class="prop-value" data-key="tank-dynamic-level-rate">${escapeHtml(formatTankTraceDisplayValue(results.dynamicLevelRate, 'm/h'))}</strong>
                 </div>
                 <div class="boundary-result-card boundary-result-card-wide">
                     <span>SRC Feed Flow Breakdown</span>
@@ -2000,10 +2033,471 @@ function renderTankReadoutCards(node, tbody) {
                     <span>Warnings</span>
                     <strong class="prop-value" data-key="tank-warnings">${escapeHtml(warnings.join(' | ') || 'OK')}</strong>
                 </div>
+                <div class="boundary-result-card boundary-result-card-wide">
+                    <span>Advisories</span>
+                    <strong class="prop-value" data-key="tank-advisories">${escapeHtml(advisories.join(' | ') || '-')}</strong>
+                </div>
             </div>
         </td>
     `;
     tbody.appendChild(tr);
+}
+
+function getLevelControllerTargetContext(nodeId, node) {
+    const link = typeof getInstrumentLink === 'function' ? getInstrumentLink(nodeId) : null;
+    const targetId = link?.targetId || node?.props?.attachedTo || '';
+    const target = targetId && typeof globalModel !== 'undefined' ? globalModel[targetId] : null;
+    const measurement = typeof calculateLevelControllerMeasurement === 'function'
+        ? calculateLevelControllerMeasurement(node, link || targetId, globalModel)
+        : null;
+    return {
+        link,
+        targetId,
+        target,
+        values: measurement?.values || {}
+    };
+}
+
+function updateLevelControllerTargetLimit(input, instrumentId) {
+    const targetId = input.dataset.target;
+    const key = input.dataset.key;
+    const target = targetId && typeof globalModel !== 'undefined' ? globalModel[targetId] : null;
+    const value = parseFloat(input.value);
+    if (!target?.props || !key || !Number.isFinite(value)) return;
+
+    if (typeof captureSidebarEdit === 'function') captureSidebarEdit(input);
+    target.props[key] = value;
+    if (target.type === 'tank' && typeof refreshTankInventoryCalculations === 'function') {
+        refreshTankInventoryCalculations(target.props);
+    }
+    if (target.type === 'tank' && typeof updateTankPressureReadout === 'function') {
+        updateTankPressureReadout(targetId);
+    }
+    if (typeof updateSimulation === 'function') {
+        updateSimulation({ renderSidebarAfter: false });
+    }
+    if (typeof updateInstrumentCalculationTraceReadout === 'function') {
+        updateInstrumentCalculationTraceReadout(instrumentId);
+    }
+}
+
+function renderLevelControllerTankControls(nodeId, context, tbody) {
+    const target = context?.target;
+    if (!target || !['tank', 'separator', 'verticalVessel'].includes(target.type)) return;
+
+    const props = target.props || {};
+    const values = context.values || {};
+    const isTank = target.type === 'tank';
+    const tr = document.createElement('tr');
+    tr.className = 'lic-control-row';
+    tr.innerHTML = `
+        <td colspan="2" class="lic-control-cell">
+            <div class="lic-control-panel">
+                <div class="lic-control-summary">
+                    <strong>LIC Level Operation</strong>
+                    <span>SP% is converted through LLL-HLL span. Apply writes the attached tank current level; inventory balance remains driven by Qin - Qout.</span>
+                </div>
+                ${isTank ? `
+                    <div class="lic-control-grid">
+                        <label>
+                            <span>HLL above Base</span>
+                            <input class="prop-input-field lic-linked-tank-input" type="number" data-instrument="${escapeHtml(nodeId)}" data-target="${escapeHtml(context.targetId)}" data-key="hll" value="${escapeHtml(props.hll ?? '')}">
+                            <em>m</em>
+                        </label>
+                        <label>
+                            <span>NLL above Base</span>
+                            <input class="prop-input-field lic-linked-tank-input" type="number" data-instrument="${escapeHtml(nodeId)}" data-target="${escapeHtml(context.targetId)}" data-key="nll" value="${escapeHtml(props.nll ?? '')}">
+                            <em>m</em>
+                        </label>
+                        <label>
+                            <span>LLL above Base</span>
+                            <input class="prop-input-field lic-linked-tank-input" type="number" data-instrument="${escapeHtml(nodeId)}" data-target="${escapeHtml(context.targetId)}" data-key="lll" value="${escapeHtml(props.lll ?? '')}">
+                            <em>m</em>
+                        </label>
+                    </div>
+                ` : ''}
+                <div class="lic-control-balance">
+                    <span>Balanced target:</span>
+                    <strong>Qout = ${escapeHtml(formatInstrumentTraceDisplayValue(values.requiredOutletFlow, 'm3/h'))}</strong>
+                    <small>Level will stay steady when total inlet equals outlet.</small>
+                </div>
+                <div class="lic-control-actions">
+                    <button class="btn-add-segment btn-lic-apply-setpoint" data-instrument="${escapeHtml(nodeId)}">Apply SP to Tank Level</button>
+                </div>
+            </div>
+        </td>
+    `;
+    tbody.appendChild(tr);
+
+    tr.querySelectorAll('.lic-linked-tank-input').forEach(input => {
+        input.addEventListener('blur', () => {
+            if (typeof releaseSidebarEditCapture === 'function') releaseSidebarEditCapture(input);
+        });
+        input.addEventListener('input', () => updateLevelControllerTargetLimit(input, nodeId));
+    });
+
+    tr.querySelector('.btn-lic-apply-setpoint')?.addEventListener('click', () => {
+        if (typeof applyLevelControllerSetPointToTank !== 'function') return;
+        if (typeof captureState === 'function') captureState();
+        const result = applyLevelControllerSetPointToTank(nodeId, globalModel);
+        if (typeof updateSimulation === 'function') {
+            updateSimulation({ renderSidebarAfter: true });
+        }
+        if (typeof showUiToast === 'function') {
+            showUiToast(result.ok ? `LIC applied ${formatInstrumentTraceDisplayValue(result.level, 'm')} to ${result.targetId}.` : result.message, {
+                title: result.ok ? 'LIC Level Applied' : 'LIC Level Not Applied',
+                variant: result.ok ? 'success' : 'warning',
+                duration: 4200
+            });
+        }
+    });
+}
+
+function getLevelControllerTrendHistory(nodeId) {
+    const instrument = typeof globalModel !== 'undefined' ? globalModel[nodeId] : null;
+    const history = Array.isArray(instrument?.results?.levelTrendHistory)
+        ? instrument.results.levelTrendHistory
+        : [];
+    return typeof sanitizeLevelControllerTrendHistory === 'function'
+        ? sanitizeLevelControllerTrendHistory(history)
+        : history;
+}
+
+function getLevelControllerTrendViewState(nodeId) {
+    const instrument = typeof globalModel !== 'undefined' ? globalModel[nodeId] : null;
+    const history = getLevelControllerTrendHistory(nodeId);
+    const normalizedView = typeof normalizeLevelControllerTrendView === 'function'
+        ? normalizeLevelControllerTrendView(instrument?.results?.levelTrendView, history.length)
+        : {
+            mode: history.length && instrument?.results?.levelTrendView?.mode === 'rewind' ? 'rewind' : 'live',
+            sampleIndex: history.length
+                ? Math.min(Math.max(parseInt(instrument?.results?.levelTrendView?.sampleIndex, 10) || history.length, 1), history.length)
+                : 0
+        };
+
+    if (instrument) {
+        if (!instrument.results) instrument.results = {};
+        instrument.results.levelTrendHistory = history;
+        instrument.results.levelTrendView = normalizedView;
+    }
+
+    const visibleHistory = normalizedView.mode === 'rewind'
+        ? history.slice(0, normalizedView.sampleIndex)
+        : history;
+    return {
+        history,
+        visibleHistory,
+        selected: visibleHistory[visibleHistory.length - 1] || null,
+        mode: normalizedView.mode,
+        sampleIndex: normalizedView.sampleIndex
+    };
+}
+
+function setLevelControllerTrendView(nodeId, mode = 'live', sampleIndex = null) {
+    const instrument = typeof globalModel !== 'undefined' ? globalModel[nodeId] : null;
+    if (!instrument || instrument.type !== 'levelController') return;
+    if (!instrument.results) instrument.results = {};
+    const history = getLevelControllerTrendHistory(nodeId);
+    const requestedIndex = mode === 'live'
+        ? history.length
+        : (parseInt(sampleIndex, 10) || history.length);
+    instrument.results.levelTrendView = typeof normalizeLevelControllerTrendView === 'function'
+        ? normalizeLevelControllerTrendView({ mode, sampleIndex: requestedIndex }, history.length)
+        : {
+            mode: history.length && mode === 'rewind' ? 'rewind' : 'live',
+            sampleIndex: history.length ? Math.min(Math.max(requestedIndex, 1), history.length) : 0
+        };
+    if (instrument.results.levelTrendView.mode === 'live') {
+        instrument.results.levelTrendView.sampleIndex = history.length;
+    }
+    updateLevelControllerTrendChart(nodeId);
+}
+
+function updateLevelControllerTrendControls(panel, instrumentId, state) {
+    if (!panel || !state) return;
+    const liveButton = panel.querySelector('[data-lic-trend-live]');
+    const rewindButton = panel.querySelector('[data-lic-trend-rewind]');
+    const slider = panel.querySelector('[data-lic-trend-rewind-slider]');
+    const label = panel.querySelector('[data-lic-trend-rewind-label]');
+    const badge = panel.querySelector('.lic-trend-chart-badge');
+    const count = state.history.length;
+    const isRewind = state.mode === 'rewind';
+
+    if (liveButton) {
+        liveButton.classList.toggle('active', !isRewind);
+        liveButton.setAttribute('aria-pressed', String(!isRewind));
+    }
+    if (rewindButton) {
+        rewindButton.classList.toggle('active', isRewind);
+        rewindButton.setAttribute('aria-pressed', String(isRewind));
+        rewindButton.disabled = count === 0;
+    }
+    if (slider) {
+        slider.min = count ? '1' : '0';
+        slider.max = String(count || 0);
+        slider.value = String(count ? state.sampleIndex : 0);
+        slider.disabled = !count || !isRewind;
+    }
+    if (label) {
+        label.textContent = !count
+            ? 'No saved samples'
+            : (isRewind ? `Sample ${state.sampleIndex} of ${count}` : `Latest sample ${count}`);
+    }
+    if (badge) {
+        badge.textContent = isRewind ? 'Rewind' : 'Live';
+        badge.classList.toggle('lic-trend-chart-badge-rewind', isRewind);
+    }
+}
+
+function getTrendDisplayNumber(value, quantity, digits = 2, options = {}) {
+    const numeric = parseFloat(value);
+    if (!Number.isFinite(numeric)) return '-';
+    const displayValue = typeof convertToDisplay === 'function'
+        ? convertToDisplay(numeric, quantity)
+        : numeric;
+    const abs = Math.abs(displayValue);
+    const text = abs > 0 && abs < 0.001
+        ? displayValue.toExponential(2)
+        : displayValue.toFixed(digits);
+    return options.showSign && displayValue > 0 ? `+${text}` : text;
+}
+
+function updateLevelControllerTrendSummary(panel, instrumentId) {
+    const instrument = typeof globalModel !== 'undefined' ? globalModel[instrumentId] : null;
+    const state = getLevelControllerTrendViewState(instrumentId);
+    const history = state.history;
+    const latest = state.selected;
+    const summary = panel?.querySelector('[data-lic-trend-summary]');
+    const latestPv = panel?.querySelector('[data-lic-trend-latest-pv]');
+    const latestSp = panel?.querySelector('[data-lic-trend-latest-sp]');
+    const latestRate = panel?.querySelector('[data-lic-trend-latest-rate]');
+    const latestNet = panel?.querySelector('[data-lic-trend-latest-net]');
+    const empty = panel?.querySelector('[data-lic-trend-empty]');
+    const headUnit = typeof getDisplayUnit === 'function' ? getDisplayUnit('head') : 'm';
+    const rateUnit = typeof getDisplayUnit === 'function' ? getDisplayUnit('levelRate', { unit: 'm/h' }) : 'm/h';
+    const flowUnit = typeof getDisplayUnit === 'function' ? getDisplayUnit('flow') : 'm3/h';
+
+    if (summary) {
+        const sampleText = state.mode === 'rewind'
+            ? `rewind sample ${state.sampleIndex}/${history.length}`
+            : `${history.length} stored sample${history.length === 1 ? '' : 's'}`;
+        summary.textContent = latest
+            ? `${latest.trend || '-'} | ${sampleText}`
+            : (instrument?.results?.levelTrendStatus || 'Waiting for live level sample');
+    }
+    if (latestPv) latestPv.textContent = latest ? `${getTrendDisplayNumber(latest.level, 'head', 2)} ${headUnit}` : '-';
+    if (latestSp) latestSp.textContent = latest?.setPointLevel !== null && latest?.setPointLevel !== undefined
+        ? `${getTrendDisplayNumber(latest.setPointLevel, 'head', 2)} ${headUnit}`
+        : '-';
+    if (latestRate) latestRate.textContent = latest?.levelRate !== null && latest?.levelRate !== undefined
+        ? `${getTrendDisplayNumber(latest.levelRate, 'levelRate', 2, { showSign: true })} ${rateUnit}`
+        : '-';
+    if (latestNet) latestNet.textContent = latest?.netFlow !== null && latest?.netFlow !== undefined
+        ? `${getTrendDisplayNumber(latest.netFlow, 'flow', 1, { showSign: true })} ${flowUnit}`
+        : '-';
+    if (empty) empty.hidden = history.length > 0;
+    updateLevelControllerTrendControls(panel, instrumentId, state);
+}
+
+function buildLevelControllerTrendSeries(history, key) {
+    return history
+        .map(sample => {
+            const x = parseFloat(sample.index);
+            const value = parseFloat(sample[key]);
+            if (!Number.isFinite(x) || !Number.isFinite(value)) return null;
+            const y = typeof convertToDisplay === 'function' ? convertToDisplay(value, 'head') : value;
+            return Number.isFinite(y) ? { x, y } : null;
+        })
+        .filter(Boolean);
+}
+
+async function updateLevelControllerTrendChart(instrumentId) {
+    try {
+        if (typeof document === 'undefined') return null;
+        const canvases = Array.from(document.querySelectorAll('[data-lic-trend-chart]'));
+        const canvas = canvases.find(item => item.dataset.instrumentId === instrumentId);
+        if (!canvas) return null;
+
+        const panel = canvas.closest('.lic-trend-chart-panel');
+        const state = getLevelControllerTrendViewState(instrumentId);
+        const history = state.visibleHistory;
+        updateLevelControllerTrendSummary(panel, instrumentId);
+        if (!history.length || typeof loadChartJsOnDemand !== 'function') {
+            const existingChart = levelControllerTrendChartInstances.get(instrumentId);
+            if (existingChart) {
+                existingChart.data.datasets = [];
+                existingChart.update('none');
+            }
+            return null;
+        }
+
+        const ChartCtor = await loadChartJsOnDemand();
+        const headUnit = typeof getDisplayUnit === 'function' ? getDisplayUnit('head') : 'm';
+        const datasets = [
+            {
+                label: 'PV Level',
+                data: buildLevelControllerTrendSeries(history, 'level'),
+                borderColor: '#1c4568',
+                backgroundColor: 'rgba(28, 69, 104, 0.10)',
+                borderWidth: 2,
+                tension: 0.25,
+                pointRadius: 2
+            },
+            {
+                label: 'SP Level',
+                data: buildLevelControllerTrendSeries(history, 'setPointLevel'),
+                borderColor: '#16a34a',
+                borderWidth: 2,
+                borderDash: [5, 4],
+                tension: 0.2,
+                pointRadius: 0
+            },
+            {
+                label: 'HLL',
+                data: buildLevelControllerTrendSeries(history, 'hll'),
+                borderColor: '#dc2626',
+                borderWidth: 1.4,
+                borderDash: [3, 4],
+                pointRadius: 0,
+                tension: 0
+            },
+            {
+                label: 'NLL',
+                data: buildLevelControllerTrendSeries(history, 'nll'),
+                borderColor: '#64748b',
+                borderWidth: 1.2,
+                borderDash: [2, 4],
+                pointRadius: 0,
+                tension: 0
+            },
+            {
+                label: 'LLL',
+                data: buildLevelControllerTrendSeries(history, 'lll'),
+                borderColor: '#f97316',
+                borderWidth: 1.4,
+                borderDash: [3, 4],
+                pointRadius: 0,
+                tension: 0
+            }
+        ];
+
+        let chart = levelControllerTrendChartInstances.get(instrumentId);
+        if (chart && chart.canvas !== canvas) {
+            chart.destroy();
+            levelControllerTrendChartInstances.delete(instrumentId);
+            chart = null;
+        }
+
+        if (!chart) {
+            chart = new ChartCtor(canvas.getContext('2d'), {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    parsing: false,
+                    interaction: { intersect: false, mode: 'nearest' },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'bottom',
+                            labels: { boxWidth: 12, boxHeight: 2, font: { size: 10 } }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: item => `${item.dataset.label}: ${item.parsed.y.toFixed(2)} ${headUnit}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            title: {
+                                display: true,
+                                text: state.mode === 'rewind' ? 'Saved Sample (Rewind)' : 'Realtime Sample'
+                            },
+                            grid: { color: '#eef2f7' },
+                            ticks: { maxTicksLimit: 7, precision: 0 }
+                        },
+                        y: {
+                            title: { display: true, text: `Level (${headUnit})` },
+                            grid: { color: '#eef2f7' },
+                            ticks: { maxTicksLimit: 6 }
+                        }
+                    }
+                }
+            });
+            levelControllerTrendChartInstances.set(instrumentId, chart);
+        } else {
+            chart.data.datasets = datasets;
+            chart.options.scales.x.title.text = state.mode === 'rewind' ? 'Saved Sample (Rewind)' : 'Realtime Sample';
+            chart.options.scales.y.title.text = `Level (${headUnit})`;
+            chart.update('none');
+        }
+        return chart;
+    } catch (error) {
+        console.warn('Unable to update LIC trend chart.', error);
+        return null;
+    }
+}
+
+function updateAllLevelControllerTrendCharts() {
+    if (typeof document === 'undefined') return;
+    document.querySelectorAll('[data-lic-trend-chart]').forEach(canvas => {
+        const instrumentId = canvas.dataset.instrumentId;
+        if (instrumentId) updateLevelControllerTrendChart(instrumentId);
+    });
+}
+
+function renderLevelControllerTrendChart(nodeId, tbody) {
+    const tr = document.createElement('tr');
+    tr.className = 'lic-trend-chart-row';
+    tr.innerHTML = `
+        <td colspan="2" class="lic-trend-chart-cell">
+            <div class="lic-trend-chart-panel" data-lic-trend-panel="${escapeHtml(nodeId)}">
+                <div class="lic-trend-chart-head">
+                    <div>
+                        <strong>Liquid Level Trend</strong>
+                        <span data-lic-trend-summary>Waiting for live level sample</span>
+                    </div>
+                    <div class="lic-trend-chart-badge">Live</div>
+                </div>
+                <div class="lic-trend-rewind-controls">
+                    <div class="lic-trend-mode-buttons" role="group" aria-label="LIC trend playback mode">
+                        <button type="button" class="lic-trend-mode-button active" data-lic-trend-live aria-pressed="true">Live</button>
+                        <button type="button" class="lic-trend-mode-button" data-lic-trend-rewind aria-pressed="false">Rewind</button>
+                    </div>
+                    <input type="range" min="0" max="0" value="0" class="lic-trend-rewind-slider" data-lic-trend-rewind-slider aria-label="Rewind LIC trend sample">
+                    <span data-lic-trend-rewind-label>No saved samples</span>
+                </div>
+                <div class="lic-trend-metrics">
+                    <div><span>PV Level</span><strong data-lic-trend-latest-pv>-</strong></div>
+                    <div><span>SP Level</span><strong data-lic-trend-latest-sp>-</strong></div>
+                    <div><span>Level Rate</span><strong data-lic-trend-latest-rate>-</strong></div>
+                    <div><span>Net Flow</span><strong data-lic-trend-latest-net>-</strong></div>
+                </div>
+                <div class="lic-trend-chart-wrap">
+                    <canvas data-lic-trend-chart data-instrument-id="${escapeHtml(nodeId)}" aria-label="LIC liquid level live trend chart"></canvas>
+                    <div class="lic-trend-empty" data-lic-trend-empty>Run or update the simulation while this LIC is attached to a tank/vessel to build the live trend.</div>
+                </div>
+            </div>
+        </td>
+    `;
+    tbody.appendChild(tr);
+    const panel = tr.querySelector('.lic-trend-chart-panel');
+    const liveButton = panel?.querySelector('[data-lic-trend-live]');
+    const rewindButton = panel?.querySelector('[data-lic-trend-rewind]');
+    const slider = panel?.querySelector('[data-lic-trend-rewind-slider]');
+    liveButton?.addEventListener('click', () => setLevelControllerTrendView(nodeId, 'live'));
+    rewindButton?.addEventListener('click', () => setLevelControllerTrendView(nodeId, 'rewind', slider?.value));
+    slider?.addEventListener('input', () => setLevelControllerTrendView(nodeId, 'rewind', slider.value));
+    updateLevelControllerTrendSummary(panel, nodeId);
+    if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+        window.setTimeout(() => updateLevelControllerTrendChart(nodeId), 0);
+    } else {
+        updateLevelControllerTrendChart(nodeId);
+    }
 }
 
 function renderObjectProperties(type, nodeId, node, addRow, tbody) {
@@ -2345,6 +2839,8 @@ function renderObjectProperties(type, nodeId, node, addRow, tbody) {
 
     if (typeof isInstrumentType === 'function' && isInstrumentType(type)) {
         const isLevelController = type === 'levelController';
+        const levelControllerContext = isLevelController ? getLevelControllerTargetContext(nodeId, node) : null;
+        const levelControllerValues = levelControllerContext?.values || {};
         const readoutHeader = document.createElement('tr');
         readoutHeader.innerHTML = `<td colspan="2" style="background:#eee; font-weight:bold; padding:4px 8px; text-align:center;">${isLevelController ? 'Level Signal Readout' : 'Pipeline Readout'}</td>`;
         tbody.appendChild(readoutHeader);
@@ -2358,8 +2854,15 @@ function renderObjectProperties(type, nodeId, node, addRow, tbody) {
             addRow('Measured Variable', node.props.measuredVariable || 'level', 'instrument-measured-variable', true);
             addRow('PV Level', node.props.measuredLevel, 'instrument-measured-level', true, 'm');
             addRow('PV Level Percent', node.props.measuredLevelPercent ?? node.props.measuredValue, 'instrument-measured', true, '%');
+            addRow('Set Point Level', levelControllerValues.setPointLevel ?? node.props.setPointLevel, 'instrument-setpoint-level', true, 'm');
             addRow('Control Error', node.props.controllerError, 'instrument-controller-error', true, '%');
             addRow('Controller Output', node.props.controllerOutput ?? node.props.measuredPercent, 'instrument-signal', true, '%');
+            addRow('Tank Net Flow', levelControllerValues.netFlow ?? node.props.tankNetFlow, 'instrument-tank-net-flow', true, 'm3/h');
+            addRow('Level Trend', levelControllerValues.levelTrend ?? node.props.tankLevelTrend, 'instrument-tank-level-trend', true);
+            addRow('Level Rate', levelControllerValues.levelRate ?? node.props.tankLevelRate, 'instrument-tank-level-rate', true, 'm/h');
+            addRow('Required Outlet Flow', levelControllerValues.requiredOutletFlow ?? node.props.requiredOutletFlow, 'instrument-required-outlet-flow', true, 'm3/h');
+            renderLevelControllerTankControls(nodeId, levelControllerContext, tbody);
+            renderLevelControllerTrendChart(nodeId, tbody);
         } else {
             addRow('Measured Value', node.props.measuredValue, 'instrument-measured', true, node.props.measuredUnit || '');
             addRow('Signal', node.props.measuredPercent, 'instrument-signal', true, '%');

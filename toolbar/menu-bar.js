@@ -5,9 +5,36 @@ let undoStack = [];
 let redoStack = [];
 const MAX_UNDO = 20;
 let currentFileHandle = null;
-const HYSYS_FILE_TYPES = [{
-    description: 'HYSYS Simulator File',
-    accept: {'application/json': ['.hysys', '.json']}
+let currentProjectFileFormat = 'new';
+let dynamicInventoryRealtimeTimer = null;
+const UNTIRTA_MAGIC = 'UNTIRTA-NPSH-V1\n';
+const UNTIRTA_PROJECT_FORMAT = 'untirta-npsh-simulation';
+const UNTIRTA_PROJECT_VERSION = 1;
+const UNTIRTA_PROJECT_EXTENSION = '.untirta';
+const LEGACY_HYSYS_EXTENSION = '.hysys';
+const PROJECT_MAX_FILE_BYTES = 12 * 1024 * 1024;
+const PROJECT_MAX_HEADER_BYTES = 64 * 1024;
+const PROJECT_MAX_OBJECTS = 600;
+const PROJECT_MAX_CONNECTIONS = 1200;
+const PROJECT_MAX_ARRAY_ITEMS = 6000;
+const PROJECT_MAX_STRING_LENGTH = 5000;
+const PROJECT_MAX_TOTAL_KEYS = 60000;
+const PROJECT_MAX_DEPTH = 36;
+const PROJECT_UNSAFE_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+const UNTIRTA_SAVE_FILE_TYPES = [{
+    description: 'UNTIRTA NPSH Project',
+    accept: {'application/octet-stream': [UNTIRTA_PROJECT_EXTENSION]}
+}];
+const PROJECT_OPEN_FILE_TYPES = [{
+    description: 'UNTIRTA NPSH Project or Legacy HYSYS File',
+    accept: {
+        'application/octet-stream': [UNTIRTA_PROJECT_EXTENSION],
+        'application/json': [LEGACY_HYSYS_EXTENSION, '.json']
+    }
+}];
+const LEGACY_HYSYS_FILE_TYPES = [{
+    description: 'Legacy HYSYS Simulator File',
+    accept: {'application/json': [LEGACY_HYSYS_EXTENSION]}
 }];
 let uiToastCounter = 0;
 let activeUiConfirmDismiss = null;
@@ -182,42 +209,352 @@ function showUiConfirm(options = {}) {
     });
 }
 
-function downloadSimulationFile() {
-    const json = getSimulationState();
-    const blob = new Blob([json], { type: 'application/json' });
+function getProjectTextEncoder() {
+    return new TextEncoder();
+}
+
+function getProjectTextDecoder() {
+    return new TextDecoder();
+}
+
+function concatUint8Arrays(chunks) {
+    const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
+    const output = new Uint8Array(length);
+    let offset = 0;
+    chunks.forEach(chunk => {
+        output.set(chunk, offset);
+        offset += chunk.length;
+    });
+    return output;
+}
+
+function getUntirtaMagicBytes() {
+    return getProjectTextEncoder().encode(UNTIRTA_MAGIC);
+}
+
+function hasUntirtaMagic(bytes) {
+    if (!bytes || bytes.length < UNTIRTA_MAGIC.length) return false;
+    const magic = getUntirtaMagicBytes();
+    for (let i = 0; i < magic.length; i += 1) {
+        if (bytes[i] !== magic[i]) return false;
+    }
+    return true;
+}
+
+function formatTwoDigitProjectPart(value) {
+    return String(value).padStart(2, '0');
+}
+
+function createGhaniProjectFilename(date = new Date()) {
+    const yyyy = date.getFullYear();
+    const mm = formatTwoDigitProjectPart(date.getMonth() + 1);
+    const dd = formatTwoDigitProjectPart(date.getDate());
+    const hh = formatTwoDigitProjectPart(date.getHours());
+    const mi = formatTwoDigitProjectPart(date.getMinutes());
+    const ss = formatTwoDigitProjectPart(date.getSeconds());
+    return `Ghani-NPSH-${yyyy}${mm}${dd}-${hh}${mi}${ss}${UNTIRTA_PROJECT_EXTENSION}`;
+}
+
+async function sha256Hex(bytes) {
+    if (!window.crypto?.subtle) {
+        throw new Error('Secure project checksum is unavailable in this browser.');
+    }
+    const hash = await window.crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(hash))
+        .map(value => value.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+async function transformProjectBytes(bytes, StreamCtor) {
+    const stream = new Blob([bytes]).stream().pipeThrough(new StreamCtor('gzip'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function compressProjectBytes(bytes) {
+    if (typeof CompressionStream === 'function') {
+        try {
+            return {
+                compression: 'gzip',
+                bytes: await transformProjectBytes(bytes, CompressionStream)
+            };
+        } catch (err) {
+            console.warn('Project compression failed; saving uncompressed .untirta payload.', err);
+        }
+    }
+    return {
+        compression: 'none',
+        bytes
+    };
+}
+
+async function decompressProjectBytes(bytes, compression) {
+    if (compression === 'none') return bytes;
+    if (compression !== 'gzip') {
+        throw new Error(`Unsupported .untirta compression method: ${compression || 'unknown'}.`);
+    }
+    if (typeof DecompressionStream !== 'function') {
+        throw new Error('This browser cannot open compressed .untirta files. Please use a current Chromium, Edge, or Safari browser.');
+    }
+    return transformProjectBytes(bytes, DecompressionStream);
+}
+
+async function encodeUntirtaProject(jsonString) {
+    const encoder = getProjectTextEncoder();
+    const jsonBytes = encoder.encode(jsonString);
+    if (jsonBytes.length > PROJECT_MAX_FILE_BYTES) {
+        throw new Error('Project is too large to save safely.');
+    }
+    const packed = await compressProjectBytes(jsonBytes);
+    const checksum = await sha256Hex(packed.bytes);
+    const header = {
+        fileFormat: UNTIRTA_PROJECT_FORMAT,
+        fileVersion: UNTIRTA_PROJECT_VERSION,
+        compression: packed.compression,
+        checksum,
+        payloadBytes: packed.bytes.length,
+        savedAt: new Date().toISOString()
+    };
+    const headerBytes = encoder.encode(JSON.stringify(header));
+    if (headerBytes.length > PROJECT_MAX_HEADER_BYTES) {
+        throw new Error('Project header is too large to save safely.');
+    }
+    const headerLengthBytes = encoder.encode(headerBytes.length.toString(16).padStart(8, '0'));
+    const bytes = concatUint8Arrays([
+        getUntirtaMagicBytes(),
+        headerLengthBytes,
+        headerBytes,
+        packed.bytes
+    ]);
+    return new Blob([bytes], { type: 'application/octet-stream' });
+}
+
+async function decodeUntirtaProjectBuffer(arrayBuffer) {
+    const decoder = getProjectTextDecoder();
+    const bytes = new Uint8Array(arrayBuffer);
+    const magic = getUntirtaMagicBytes();
+    if (!hasUntirtaMagic(bytes)) {
+        throw new Error('The selected .untirta file has an invalid project header.');
+    }
+    const headerLengthStart = magic.length;
+    const headerLengthEnd = headerLengthStart + 8;
+    if (bytes.length < headerLengthEnd) {
+        throw new Error('The selected .untirta file is incomplete.');
+    }
+    const headerLengthText = decoder.decode(bytes.slice(headerLengthStart, headerLengthEnd));
+    if (!/^[0-9a-fA-F]{8}$/.test(headerLengthText)) {
+        throw new Error('The selected .untirta file has an invalid header length.');
+    }
+    const headerLength = parseInt(headerLengthText, 16);
+    if (!Number.isFinite(headerLength) || headerLength <= 0 || headerLength > PROJECT_MAX_HEADER_BYTES) {
+        throw new Error('The selected .untirta file header is outside the supported size.');
+    }
+    const headerStart = headerLengthEnd;
+    const headerEnd = headerStart + headerLength;
+    if (bytes.length < headerEnd) {
+        throw new Error('The selected .untirta file is missing its header payload.');
+    }
+    const header = JSON.parse(decoder.decode(bytes.slice(headerStart, headerEnd)));
+    if (header.fileFormat !== UNTIRTA_PROJECT_FORMAT || header.fileVersion !== UNTIRTA_PROJECT_VERSION) {
+        throw new Error('The selected .untirta file version is not supported by this application build.');
+    }
+    const payload = bytes.slice(headerEnd);
+    if (!Number.isInteger(header.payloadBytes) || header.payloadBytes !== payload.length) {
+        throw new Error('The selected .untirta file payload length does not match its header.');
+    }
+    const checksum = await sha256Hex(payload);
+    if (checksum !== header.checksum) {
+        throw new Error('The selected .untirta file checksum failed. The file may be corrupt or modified.');
+    }
+    const jsonBytes = await decompressProjectBytes(payload, header.compression);
+    if (jsonBytes.length > PROJECT_MAX_FILE_BYTES) {
+        throw new Error('The selected .untirta file expands beyond the supported project size.');
+    }
+    return {
+        jsonString: decoder.decode(jsonBytes),
+        format: 'untirta',
+        header
+    };
+}
+
+function sanitizeProjectValue(value, context, path = 'root') {
+    context.depth += 1;
+    if (context.depth > PROJECT_MAX_DEPTH) {
+        throw new Error(`Project file is too deeply nested near ${path}.`);
+    }
+
+    let sanitized;
+    if (value === null || typeof value === 'boolean') {
+        sanitized = value;
+    } else if (typeof value === 'number') {
+        if (!Number.isFinite(value)) throw new Error(`Project file contains a non-finite number near ${path}.`);
+        sanitized = value;
+    } else if (typeof value === 'string') {
+        if (value.length > PROJECT_MAX_STRING_LENGTH) {
+            throw new Error(`Project file contains an oversized text value near ${path}.`);
+        }
+        sanitized = value;
+    } else if (Array.isArray(value)) {
+        if (value.length > PROJECT_MAX_ARRAY_ITEMS) {
+            throw new Error(`Project file contains too many array items near ${path}.`);
+        }
+        sanitized = value
+            .map((item, index) => sanitizeProjectValue(item, context, `${path}[${index}]`))
+            .filter(item => item !== undefined);
+    } else if (value && typeof value === 'object') {
+        sanitized = {};
+        Object.keys(value).forEach(key => {
+            if (PROJECT_UNSAFE_KEYS.has(key)) return;
+            context.keys += 1;
+            if (context.keys > PROJECT_MAX_TOTAL_KEYS) {
+                throw new Error('Project file contains too many fields to load safely.');
+            }
+            const nextValue = sanitizeProjectValue(value[key], context, `${path}.${key}`);
+            if (nextValue !== undefined) sanitized[key] = nextValue;
+        });
+    } else {
+        sanitized = undefined;
+    }
+
+    context.depth -= 1;
+    return sanitized;
+}
+
+function validateProjectDataShape(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        throw new Error('Invalid project format: root object is missing.');
+    }
+    if (!data.model || typeof data.model !== 'object' || Array.isArray(data.model)) {
+        throw new Error('Invalid project format: model data is missing.');
+    }
+    if (!Array.isArray(data.connections)) {
+        throw new Error('Invalid project format: connection list is missing.');
+    }
+    const modelObjectCount = Object.keys(data.model)
+        .filter(key => key !== 'FLUID' && key !== 'SETTINGS')
+        .length;
+    if (modelObjectCount > PROJECT_MAX_OBJECTS) {
+        throw new Error(`Project has too many objects (${modelObjectCount}).`);
+    }
+    if (data.connections.length > PROJECT_MAX_CONNECTIONS) {
+        throw new Error(`Project has too many connections (${data.connections.length}).`);
+    }
+    if (data.instrumentLinks !== undefined && !Array.isArray(data.instrumentLinks)) {
+        throw new Error('Invalid project format: instrument links must be a list.');
+    }
+    if (data.sourceLinks !== undefined && !Array.isArray(data.sourceLinks)) {
+        throw new Error('Invalid project format: source links must be a list.');
+    }
+    if (data.visuals !== undefined && (!data.visuals || typeof data.visuals !== 'object' || Array.isArray(data.visuals))) {
+        throw new Error('Invalid project format: visual placement data must be an object.');
+    }
+    return data;
+}
+
+function prepareProjectJsonForApply(jsonString) {
+    if (typeof jsonString !== 'string' || jsonString.length > PROJECT_MAX_FILE_BYTES) {
+        throw new Error('Project file is too large or unreadable.');
+    }
+    const parsed = JSON.parse(jsonString);
+    const sanitized = sanitizeProjectValue(parsed, { keys: 0, depth: 0 });
+    validateProjectDataShape(sanitized);
+    return JSON.stringify(sanitized);
+}
+
+function applySimulationStateAtomic(jsonString) {
+    const previousState = getSimulationState();
+    const safeJson = prepareProjectJsonForApply(jsonString);
+    try {
+        applySimulationState(safeJson);
+        return true;
+    } catch (err) {
+        try {
+            applySimulationState(previousState);
+        } catch (restoreErr) {
+            console.error('Failed to restore the previous simulation state after a project load error.', restoreErr);
+        }
+        throw err;
+    }
+}
+
+async function decodeLegacyProjectBuffer(arrayBuffer, format = 'legacy-json') {
+    if (arrayBuffer.byteLength > PROJECT_MAX_FILE_BYTES) {
+        throw new Error('Legacy project file is too large to import safely.');
+    }
+    return {
+        jsonString: getProjectTextDecoder().decode(new Uint8Array(arrayBuffer)),
+        format
+    };
+}
+
+async function decodeProjectFile(file, options = {}) {
+    if (!file) throw new Error('No project file was selected.');
+    if (file.size > PROJECT_MAX_FILE_BYTES) {
+        throw new Error('Project file is too large to open safely.');
+    }
+    const lowerName = String(file.name || '').toLowerCase();
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+
+    if (options.legacyOnly) {
+        if (!lowerName.endsWith(LEGACY_HYSYS_EXTENSION)) {
+            throw new Error('Legacy import only accepts .hysys files.');
+        }
+        return decodeLegacyProjectBuffer(arrayBuffer, 'legacy-hysys');
+    }
+    if (hasUntirtaMagic(bytes) || lowerName.endsWith(UNTIRTA_PROJECT_EXTENSION)) {
+        return decodeUntirtaProjectBuffer(arrayBuffer);
+    }
+    const legacyFormat = lowerName.endsWith(LEGACY_HYSYS_EXTENSION) ? 'legacy-hysys' : 'legacy-json';
+    return decodeLegacyProjectBuffer(arrayBuffer, legacyFormat);
+}
+
+async function applyDecodedProjectFile(file, options = {}) {
+    const decoded = await decodeProjectFile(file, options);
+    applySimulationStateAtomic(decoded.jsonString);
+    currentFileHandle = null;
+    currentProjectFileFormat = decoded.format;
+    undoStack = [];
+    redoStack = [];
+    return decoded;
+}
+
+async function createUntirtaProjectBlob() {
+    return encodeUntirtaProject(getSimulationState());
+}
+
+async function downloadSimulationFile() {
+    const blob = await createUntirtaProjectBlob();
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
 
     link.href = url;
-    link.download = `hysys-simulation-${timestamp}.hysys`;
+    link.download = createGhaniProjectFilename();
     document.body.appendChild(link);
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    showUiToast('Simulation file download has started.', {
+    currentProjectFileFormat = 'untirta';
+    showUiToast('Simulation file download has started. UNTIRTA project file is being saved.', {
         title: 'Save As',
         variant: 'success'
     });
 }
 
-function openSimulationFileFallback() {
+function openSimulationFileFallback(options = {}) {
     return new Promise((resolve, reject) => {
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = '.hysys,.json,application/json';
+        input.accept = options.legacyOnly
+            ? '.hysys,application/json'
+            : '.untirta,.hysys,.json,application/json,application/octet-stream';
         input.style.display = 'none';
 
         input.addEventListener('change', async () => {
             try {
                 const file = input.files && input.files[0];
                 if (!file) return resolve();
-                const text = await file.text();
-                applySimulationState(text);
-                currentFileHandle = null;
-                undoStack = [];
-                redoStack = [];
-                resolve(true);
+                const decoded = await applyDecodedProjectFile(file, options);
+                resolve(decoded);
             } catch (err) {
                 reject(err);
             } finally {
@@ -236,7 +573,16 @@ function openSimulationFileFallback() {
 }
 
 function getSimulationState() {
+    if (typeof normalizeAllLevelControllerTrendHistoriesForSave === 'function') {
+        normalizeAllLevelControllerTrendHistoriesForSave(globalModel);
+    }
     const data = {
+        projectFile: {
+            fileFormat: UNTIRTA_PROJECT_FORMAT,
+            fileVersion: UNTIRTA_PROJECT_VERSION,
+            preferredExtension: UNTIRTA_PROJECT_EXTENSION,
+            sourceFormat: currentProjectFileFormat
+        },
         model: globalModel,
         connections: connections,
         instrumentLinks: instrumentLinks,
@@ -254,12 +600,18 @@ function getSimulationState() {
 }
 
 function applySimulationState(jsonString) {
+    if (typeof stopDynamicInventoryRealtime === 'function') {
+        stopDynamicInventoryRealtime({ silent: true });
+    }
     const data = JSON.parse(jsonString);
     if(!data.model || !data.connections) throw new Error("Invalid format");
     const hadSettings = !!data.model.SETTINGS;
     
     Object.keys(globalModel).forEach(k => delete globalModel[k]);
     Object.assign(globalModel, data.model);
+    if (typeof restoreLevelControllerTrendState === 'function') {
+        restoreLevelControllerTrendState(globalModel);
+    }
     if (typeof ensureSimulationSettings === 'function') {
         ensureSimulationSettings(globalModel);
         if (!hadSettings && globalModel.SETTINGS?.props) {
@@ -332,7 +684,19 @@ function applySimulationState(jsonString) {
     currentSelectedNode = null;
     renderSidebar(null);
     if (typeof clearObjectTaskMinimizedDock === 'function') clearObjectTaskMinimizedDock();
-    updateSimulation({ renderSidebarAfter: false });
+    const previousTrendSuppression = typeof suppressLevelControllerTrendRecording !== 'undefined'
+        ? suppressLevelControllerTrendRecording
+        : false;
+    if (typeof suppressLevelControllerTrendRecording !== 'undefined') {
+        suppressLevelControllerTrendRecording = true;
+    }
+    try {
+        updateSimulation({ renderSidebarAfter: false });
+    } finally {
+        if (typeof suppressLevelControllerTrendRecording !== 'undefined') {
+            suppressLevelControllerTrendRecording = previousTrendSuppression;
+        }
+    }
     drawConnections();
     if (typeof updateBasisStatusPill === 'function') updateBasisStatusPill();
 }
@@ -364,6 +728,9 @@ async function clearSimulationCanvas() {
         variant: 'danger'
     });
     if (!confirmed) return false;
+    if (typeof stopDynamicInventoryRealtime === 'function') {
+        stopDynamicInventoryRealtime({ silent: true });
+    }
 
     captureState();
     
@@ -412,18 +779,21 @@ async function fileClose() {
     const cleared = await clearSimulationCanvas();
     if (!cleared) return false;
     currentFileHandle = null;
+    currentProjectFileFormat = 'new';
     return true;
 }
 
 async function fileSaveAs() {
     if (!window.showSaveFilePicker) {
-        downloadSimulationFile();
+        await downloadSimulationFile();
         return;
     }
 
     try {
         const handle = await window.showSaveFilePicker({
-            types: HYSYS_FILE_TYPES
+            suggestedName: createGhaniProjectFilename(),
+            types: UNTIRTA_SAVE_FILE_TYPES,
+            excludeAcceptAllOption: false
         });
         currentFileHandle = handle;
         await fileSave();
@@ -439,11 +809,12 @@ async function fileSave() {
     }
 
     try {
-        const json = getSimulationState();
+        const blob = await createUntirtaProjectBlob();
         
         const writable = await currentFileHandle.createWritable();
-        await writable.write(json);
+        await writable.write(blob);
         await writable.close();
+        currentProjectFileFormat = 'untirta';
         showUiToast('File saved successfully.', {
             title: 'Save',
             variant: 'success'
@@ -461,17 +832,45 @@ async function fileSave() {
 
 async function fileOpen() {
     try {
-        const loaded = await openSimulationFileFallback();
+        const loaded = await openSimulationFileFallback({
+            types: PROJECT_OPEN_FILE_TYPES
+        });
         if (loaded) {
-            showUiToast('Simulation file loaded successfully.', {
-                title: 'Open',
+            const isLegacy = loaded.format && loaded.format.startsWith('legacy');
+            showUiToast(isLegacy
+                ? 'Legacy project imported. Use Save As to write the official .untirta file.'
+                : 'Simulation file loaded successfully. UNTIRTA project opened.', {
+                title: isLegacy ? 'Legacy import' : 'Open',
                 variant: 'success'
             });
         }
     } catch (err) {
         console.error(err);
-        showUiToast('Failed to open file. Please choose a valid .hysys or .json file saved by this app.', {
+        showUiToast(err?.message || 'Failed to open file. Please choose a valid .untirta project or legacy .hysys file saved by this app.', {
             title: 'Open failed',
+            variant: 'error',
+            duration: 7200
+        });
+    }
+}
+
+async function fileImportLegacyHysys() {
+    try {
+        const loaded = await openSimulationFileFallback({
+            legacyOnly: true,
+            types: LEGACY_HYSYS_FILE_TYPES
+        });
+        if (loaded) {
+            showUiToast('Legacy .hysys project imported. Use Save As to convert it to .untirta.', {
+                title: 'Import Legacy',
+                variant: 'success',
+                duration: 5600
+            });
+        }
+    } catch (err) {
+        console.error(err);
+        showUiToast(err?.message || 'Failed to import the legacy .hysys file.', {
+            title: 'Import failed',
             variant: 'error',
             duration: 7200
         });
@@ -519,6 +918,162 @@ function refreshCalculationsFromMenu() {
             title: 'Refresh complete',
             variant: 'success',
             duration: 3600
+        });
+    }
+}
+
+function updateDynamicInventoryMenuLabels() {
+    const stepButton = document.getElementById('menu-step-dynamic-inventory');
+    const stepSizeButton = document.getElementById('menu-dynamic-step-size');
+    const realtimeButton = document.getElementById('menu-toggle-dynamic-realtime');
+    const realtimeIntervalButton = document.getElementById('menu-dynamic-realtime-interval');
+    const stepSeconds = typeof getDynamicInventorySettings === 'function'
+        ? getDynamicInventorySettings().dynamicStepSeconds
+        : 60;
+    const realtimeIntervalMs = typeof getDynamicInventorySettings === 'function'
+        ? getDynamicInventorySettings().dynamicRealtimeIntervalMs
+        : 60000;
+    const duration = typeof formatDynamicInventoryDuration === 'function'
+        ? formatDynamicInventoryDuration(stepSeconds)
+        : `${stepSeconds} s`;
+    const realtimeDuration = typeof formatDynamicInventoryDuration === 'function'
+        ? formatDynamicInventoryDuration(realtimeIntervalMs / 1000)
+        : `${realtimeIntervalMs / 1000} s`;
+    if (stepButton) stepButton.textContent = `Step Dynamic Inventory (${duration})`;
+    if (stepSizeButton) stepSizeButton.textContent = `Dynamic Step Size: ${duration}`;
+    if (realtimeButton) {
+        realtimeButton.textContent = dynamicInventoryRealtimeTimer
+            ? `Stop Realtime Dynamic Inventory (${realtimeDuration})`
+            : `Start Realtime Dynamic Inventory (${realtimeDuration})`;
+    }
+    if (realtimeIntervalButton) realtimeIntervalButton.textContent = `Realtime Interval: ${realtimeDuration}`;
+}
+
+function setDynamicInventoryStepFromMenu(stepSeconds) {
+    const selectedSeconds = typeof setDynamicInventoryStepSeconds === 'function'
+        ? setDynamicInventoryStepSeconds(stepSeconds)
+        : stepSeconds;
+    updateDynamicInventoryMenuLabels();
+    if (typeof showUiToast === 'function') {
+        const duration = typeof formatDynamicInventoryDuration === 'function'
+            ? formatDynamicInventoryDuration(selectedSeconds)
+            : `${selectedSeconds} s`;
+        showUiToast(`Dynamic inventory timestep set to ${duration}.`, {
+            title: 'Dynamic Step Size',
+            variant: 'success',
+            duration: 2600
+        });
+    }
+}
+
+function setDynamicInventoryRealtimeIntervalFromMenu(intervalMs) {
+    const selectedMs = typeof setDynamicInventoryRealtimeIntervalMs === 'function'
+        ? setDynamicInventoryRealtimeIntervalMs(intervalMs)
+        : intervalMs;
+    const wasRunning = !!dynamicInventoryRealtimeTimer;
+    if (wasRunning) stopDynamicInventoryRealtime({ silent: true });
+    updateDynamicInventoryMenuLabels();
+    if (wasRunning) startDynamicInventoryRealtime({ silent: true });
+
+    if (typeof showUiToast === 'function') {
+        const duration = typeof formatDynamicInventoryDuration === 'function'
+            ? formatDynamicInventoryDuration(selectedMs / 1000)
+            : `${selectedMs / 1000} s`;
+        showUiToast(`Realtime dynamic inventory interval set to ${duration}.`, {
+            title: 'Realtime Interval',
+            variant: 'success',
+            duration: 3000
+        });
+    }
+}
+
+function runDynamicInventoryRealtimeTick() {
+    if (typeof stepDynamicTankInventory !== 'function') return null;
+    return stepDynamicTankInventory({ renderSidebarAfter: true });
+}
+
+function startDynamicInventoryRealtime(options = {}) {
+    if (dynamicInventoryRealtimeTimer || typeof stepDynamicTankInventory !== 'function') return;
+    if (typeof captureState === 'function') captureState();
+    const settings = typeof getDynamicInventorySettings === 'function'
+        ? getDynamicInventorySettings()
+        : { dynamicRealtimeIntervalMs: 60000, dynamicStepSeconds: 60 };
+    runDynamicInventoryRealtimeTick();
+    dynamicInventoryRealtimeTimer = window.setInterval(runDynamicInventoryRealtimeTick, settings.dynamicRealtimeIntervalMs);
+    updateDynamicInventoryMenuLabels();
+
+    if (!options.silent && typeof showUiToast === 'function') {
+        const stepDuration = typeof formatDynamicInventoryDuration === 'function'
+            ? formatDynamicInventoryDuration(settings.dynamicStepSeconds)
+            : `${settings.dynamicStepSeconds} s`;
+        const intervalDuration = typeof formatDynamicInventoryDuration === 'function'
+            ? formatDynamicInventoryDuration(settings.dynamicRealtimeIntervalMs / 1000)
+            : `${settings.dynamicRealtimeIntervalMs / 1000} s`;
+        showUiToast(`Realtime dynamic inventory started. Step = ${stepDuration}, interval = ${intervalDuration}.`, {
+            title: 'Dynamic Inventory',
+            variant: 'success',
+            duration: 5200
+        });
+    }
+}
+
+function stopDynamicInventoryRealtime(options = {}) {
+    if (!dynamicInventoryRealtimeTimer) {
+        updateDynamicInventoryMenuLabels();
+        return;
+    }
+    window.clearInterval(dynamicInventoryRealtimeTimer);
+    dynamicInventoryRealtimeTimer = null;
+    updateDynamicInventoryMenuLabels();
+
+    if (!options.silent && typeof showUiToast === 'function') {
+        showUiToast('Realtime dynamic inventory stopped.', {
+            title: 'Dynamic Inventory',
+            variant: 'info',
+            duration: 3200
+        });
+    }
+}
+
+function toggleDynamicInventoryRealtimeFromMenu() {
+    if (dynamicInventoryRealtimeTimer) {
+        stopDynamicInventoryRealtime();
+    } else {
+        startDynamicInventoryRealtime();
+    }
+}
+
+function stepDynamicInventoryFromMenu() {
+    if (typeof stepDynamicTankInventory !== 'function') {
+        if (typeof showUiToast === 'function') {
+            showUiToast('Dynamic inventory engine is not available. Please reload the application.', {
+                title: 'Dynamic Inventory',
+                variant: 'error',
+                duration: 5200
+            });
+        }
+        return;
+    }
+
+    if (typeof captureState === 'function') captureState();
+    const result = stepDynamicTankInventory({ renderSidebarAfter: true });
+    updateDynamicInventoryMenuLabels();
+
+    if (typeof showUiToast === 'function') {
+        const duration = typeof formatDynamicInventoryDuration === 'function'
+            ? formatDynamicInventoryDuration(result.stepSeconds)
+            : `${result.stepSeconds} s`;
+        const clock = typeof formatDynamicInventoryClock === 'function'
+            ? formatDynamicInventoryClock(result.simulationTimeSeconds)
+            : `${result.simulationTimeSeconds} s`;
+        const firstTank = result.changedTanks?.[0];
+        const tankText = firstTank
+            ? `${firstTank.tankId}: ${firstTank.previousLevel} m -> ${firstTank.newLevel} m, V=${firstTank.newVolume} m3.`
+            : 'No tank level changed; check net flow, tank diameter, and tank level.';
+        showUiToast(`${duration} step complete at t=${clock}. ${tankText}`, {
+            title: result.ok ? 'Dynamic Inventory' : 'Dynamic Inventory Review',
+            variant: result.ok ? 'success' : 'info',
+            duration: result.ok ? 5200 : 6800
         });
     }
 }
@@ -811,6 +1366,15 @@ function initMenuBar() {
             });
         }
 
+        const menuImportLegacy = document.getElementById('menu-import-legacy-hysys');
+        if(menuImportLegacy) {
+            menuImportLegacy.addEventListener('click', (e) => {
+                e.preventDefault();
+                fileDropdown.classList.remove('show');
+                fileImportLegacyHysys();
+            });
+        }
+
         const menuSave = document.getElementById('menu-save');
         if(menuSave) {
             menuSave.addEventListener('click', (e) => {
@@ -994,6 +1558,76 @@ function initMenuBar() {
                 runHydraulicEvaluationFromMenu();
             });
         }
+
+        const menuStepDynamicInventory = document.getElementById('menu-step-dynamic-inventory');
+        if (menuStepDynamicInventory) {
+            menuStepDynamicInventory.addEventListener('click', (e) => {
+                e.preventDefault();
+                simulateDropdown.classList.remove('show');
+                stepDynamicInventoryFromMenu();
+            });
+        }
+
+        const menuToggleDynamicRealtime = document.getElementById('menu-toggle-dynamic-realtime');
+        if (menuToggleDynamicRealtime) {
+            menuToggleDynamicRealtime.addEventListener('click', (e) => {
+                e.preventDefault();
+                simulateDropdown.classList.remove('show');
+                toggleDynamicInventoryRealtimeFromMenu();
+            });
+        }
+
+        const menuDynamicStepSize = document.getElementById('menu-dynamic-step-size');
+        const dynamicStepSubmenu = menuDynamicStepSize?.closest('.dropdown-submenu');
+        if (menuDynamicStepSize && dynamicStepSubmenu) {
+            menuDynamicStepSize.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dynamicStepSubmenu.classList.toggle('show-submenu');
+                menuDynamicStepSize.setAttribute(
+                    'aria-expanded',
+                    dynamicStepSubmenu.classList.contains('show-submenu') ? 'true' : 'false'
+                );
+            });
+        }
+
+        document.querySelectorAll('[data-dynamic-step-seconds]').forEach(button => {
+            button.addEventListener('click', (e) => {
+                e.preventDefault();
+                const stepSeconds = parseInt(button.dataset.dynamicStepSeconds, 10);
+                setDynamicInventoryStepFromMenu(stepSeconds);
+                dynamicStepSubmenu?.classList.remove('show-submenu');
+                if (menuDynamicStepSize) menuDynamicStepSize.setAttribute('aria-expanded', 'false');
+                simulateDropdown.classList.remove('show');
+            });
+        });
+
+        const menuDynamicRealtimeInterval = document.getElementById('menu-dynamic-realtime-interval');
+        const dynamicRealtimeSubmenu = menuDynamicRealtimeInterval?.closest('.dropdown-submenu');
+        if (menuDynamicRealtimeInterval && dynamicRealtimeSubmenu) {
+            menuDynamicRealtimeInterval.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dynamicRealtimeSubmenu.classList.toggle('show-submenu');
+                menuDynamicRealtimeInterval.setAttribute(
+                    'aria-expanded',
+                    dynamicRealtimeSubmenu.classList.contains('show-submenu') ? 'true' : 'false'
+                );
+            });
+        }
+
+        document.querySelectorAll('[data-dynamic-realtime-ms]').forEach(button => {
+            button.addEventListener('click', (e) => {
+                e.preventDefault();
+                const intervalMs = parseInt(button.dataset.dynamicRealtimeMs, 10);
+                setDynamicInventoryRealtimeIntervalFromMenu(intervalMs);
+                dynamicRealtimeSubmenu?.classList.remove('show-submenu');
+                if (menuDynamicRealtimeInterval) menuDynamicRealtimeInterval.setAttribute('aria-expanded', 'false');
+                simulateDropdown.classList.remove('show');
+            });
+        });
+
+        updateDynamicInventoryMenuLabels();
 
         const menuRefreshCalculations = document.getElementById('menu-refresh-calculations');
         if (menuRefreshCalculations) {

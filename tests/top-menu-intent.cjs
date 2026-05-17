@@ -17,6 +17,10 @@ function assert(condition, message) {
     'dropdown-tools',
     'dropdown-view',
     'menu-run-solve',
+    'menu-toggle-dynamic-realtime',
+    'menu-step-dynamic-inventory',
+    'menu-dynamic-step-size',
+    'menu-dynamic-realtime-interval',
     'menu-refresh-calculations',
     'menu-tools-fluid-basis',
     'menu-tools-export-excel',
@@ -31,11 +35,19 @@ assert(!indexHtml.includes('<span class="menu-item">Tools</span>'), 'Tools shoul
 assert(!indexHtml.includes('<span class="menu-item">View</span>'), 'View should not be a nonfunctional plain menu label');
 
 assert(menuBar.includes('function runHydraulicEvaluationFromMenu'), 'Simulate menu should have a run evaluation helper');
+assert(menuBar.includes('function stepDynamicInventoryFromMenu'), 'Simulate menu should have a dynamic inventory step helper');
+assert(menuBar.includes('function toggleDynamicInventoryRealtimeFromMenu'), 'Simulate menu should have a realtime dynamic inventory helper');
+assert(menuBar.includes('function setDynamicInventoryStepFromMenu'), 'Simulate menu should expose dynamic timestep selection');
+assert(menuBar.includes('function setDynamicInventoryRealtimeIntervalFromMenu'), 'Simulate menu should expose realtime interval selection');
 assert(menuBar.includes('function refreshCalculationsFromMenu'), 'Simulate menu should have a refresh helper');
 assert(menuBar.includes('function exportScenarioTraceFromMenu'), 'Tools menu should share the scenario export helper');
 assert(menuBar.includes('function resetCanvasViewFromMenu'), 'View menu should expose a canvas reset helper');
 assert(menuBar.includes('function showWarningsPanelFromMenu'), 'View menu should expose warning panel helper');
 assert(menuBar.includes('menuRunSolve.addEventListener'), 'Run Simulation menu item should be wired');
+assert(menuBar.includes('menuToggleDynamicRealtime.addEventListener'), 'Realtime dynamic inventory menu item should be wired');
+assert(menuBar.includes('menuStepDynamicInventory.addEventListener'), 'Dynamic inventory step menu item should be wired');
+assert(menuBar.includes('data-dynamic-step-seconds'), 'Dynamic timestep menu buttons should be wired');
+assert(menuBar.includes('data-dynamic-realtime-ms'), 'Realtime interval menu buttons should be wired');
 assert(menuBar.includes('menuRefreshCalculations.addEventListener'), 'Refresh menu item should be wired');
 assert(menuBar.includes('menuToolsFluidBasis.addEventListener'), 'Tools Fluid Basis item should be wired');
 assert(menuBar.includes('menuToolsExportExcel.addEventListener'), 'Tools export item should be wired');

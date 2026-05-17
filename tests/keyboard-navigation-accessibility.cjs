@@ -40,9 +40,11 @@ assert(contextMenu.includes("e.key === 'End'"), 'Canvas context menu should supp
 assert(contextMenu.includes("e.key === 'Escape'"), 'Canvas context menu should support Escape');
 assert(contextMenu.includes('focusContextMenuButton(menu, 0)'), 'Canvas context menu should move focus into opened menu');
 
-assert(indexHtml.includes('id="toolbarObjectMenuButton"'), 'Mobile object menu button should exist');
-assert(indexHtml.includes('id="toolbarObjectMenu" role="menu"'), 'Mobile object menu should expose menu role');
-assert(indexHtml.includes('aria-controls="toolbarObjectMenu"'), 'Mobile object menu button should reference the controlled menu');
+assert(indexHtml.includes('id="toolbarObjectMenuButton"'), 'Legacy mobile object menu button markup may remain for compatibility');
+assert(styles.includes('Locked UX: the ribbon must not show the large Objects button'), 'Objects ribbon button should be hidden by locked UX rule');
+assert(styles.includes('.toolbar-object-menu-container {\n        order: 8;\n        display: none !important;'), 'Objects ribbon button should remain hidden on mobile/tablet widths');
+assert(indexHtml.includes('id="toolbarObjectMenu" role="menu"'), 'Legacy mobile object menu markup may remain dormant');
+assert(indexHtml.includes('aria-controls="toolbarObjectMenu"'), 'Legacy mobile object menu button should keep its relationship if re-enabled intentionally');
 assert(canvasManager.includes('function renderToolbarObjectMenu()'), 'Mobile object menu should be rendered from the toolbar catalog');
 assert(canvasManager.includes("itemButton.setAttribute('role', 'menuitem')"), 'Mobile object menu items should expose menuitem role');
 assert(canvasManager.includes("button.setAttribute('aria-expanded'"), 'Mobile object menu should update expanded state');
@@ -67,7 +69,8 @@ console.log(JSON.stringify({
     passed: true,
     menuKeyboardNavigation: true,
     contextMenuKeyboardNavigation: true,
-    objectMenuKeyboardNavigation: true,
+    objectPaletteKeyboardNavigation: true,
+    objectMenuHidden: true,
     taskWindowFocus: true,
     warningButtons: true
 }, null, 2));

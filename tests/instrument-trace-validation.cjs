@@ -171,8 +171,14 @@ const licTankTrace = vm.runInContext(`buildInstrumentCalculationTrace('LIC-100',
 assert(licTankTrace.status === 'OK', 'LIC trace should be OK when attached to a tank level target');
 assertClose('LIC tank PV level percent', licTankTrace.readouts.find(item => item.label === 'PV Level Percent').value, 42.857, 0.001);
 assertClose('LIC control error', licTankTrace.readouts.find(item => item.label === 'Control Error').value, 12.143, 0.001);
+assertClose('LIC set point target level', licTankTrace.readouts.find(item => item.label === 'Set Point Level').value, 3.425, 0.001);
 assert(licTankTrace.dependencyChain.some(item => item.includes('Current Level')), 'LIC trace should include level dependency chain');
 assert(licTankTrace.steps.some(step => step.title === 'PV level percent'), 'LIC trace should include level percent equation step');
+assert(licTankTrace.steps.some(step => step.title === 'Set point target level'), 'LIC trace should include set point target level equation step');
+
+const applyLicResult = vm.runInContext(`applyLevelControllerSetPointToTank('LIC-100', globalModel)`, context);
+assert(applyLicResult.ok === true, 'LIC apply should update the attached tank level');
+assertClose('LIC applied liquid level', vm.runInContext(`globalModel['TK-100'].props.liquidLevel`, context), 3.425, 0.001);
 
 const missingTrace = vm.runInContext(`buildInstrumentCalculationTrace('PTF-101', globalModel, connections)`, context);
 assert(missingTrace.status === 'Waiting for pipe attachment', 'Unattached PTF should wait for pipe attachment');
